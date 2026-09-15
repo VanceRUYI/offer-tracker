@@ -43,7 +43,7 @@ const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'ove
 let demoApps=[], toastTimer, createdHighlightTimer, formSnapshot='', recognitionPreview=null;
 state.createdId='';
 state.applicationView='companies';
-const expandedCompanies=new Set(), collapsedCompanies=new Set();
+const expandedCompanies=new Set();
 let personalization=null, personalSnapshot='';
 const apps=()=>state.demo?demoApps:state.apps;
 const findApp=id=>apps().find(a=>a.id===id);
@@ -74,7 +74,6 @@ function acceptApp(app){const i=state.apps.findIndex(a=>a.id===app.id);if(i<0)st
 function revealCreatedApplication(id){
   clearTimeout(createdHighlightTimer);
   Object.assign(state,{query:'',status:'',priority:false,company_type:'',sort:'newest',createdId:id});
-  expandedCompanies.add(companyKey(findApp(id)?.company));
   $('#globalSearch').value='';$('#drawer').close();navigate('applications');
   document.querySelector(`[data-application-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
   createdHighlightTimer=setTimeout(()=>{
@@ -157,7 +156,7 @@ function applicationTable(records,inGroup=false){return `<div class="table-scrol
 function companyGroupsView(records){
   const totals=new Map(groupCompanies(apps()).map(g=>[g.key,g.items.length]));
   return `<div class="company-groups">${groupCompanies(records).map((group,index)=>{
-    const open=expandedCompanies.has(group.key)||(group.items.length===1&&!collapsedCompanies.has(group.key)), first=group.items[0];
+    const open=expandedCompanies.has(group.key), first=group.items[0];
     const pending=group.items.filter(a=>a.next_action&&a.due_at&&a.status!=='已结束').sort((a,b)=>a.due_at.localeCompare(b.due_at))[0];
     const size=totals.get(group.key), count=size===group.items.length?`${size} 次投递`:`匹配 ${group.items.length} / ${size} 次投递`;
     return `<section class="company-group"><div class="company-group-head"><button class="company-group-toggle" data-action="toggle-company" data-key="${escape(group.key)}" aria-expanded="${open}" aria-controls="company-items-${index}"><span class="group-chevron ${open?'expanded':''}">${icon('chevron')}</span>${logo(first)}<span class="company-group-identity"><strong>${escape(group.company)}</strong><small>${count} · ${group.active} 项进行中</small></span></button><button class="button small company-add" data-action="${state.demo?'new':'company-new'}" data-id="${escape(first.id)}">${icon('plus')}${state.demo?'记录我的投递':'添加投递'}</button></div>${pending?`<button class="company-next" data-action="detail" data-id="${escape(pending.id)}">${icon('calendar')}<span>${isLate(pending)?'逾期待办':'最近安排'}：${prettyDate(pending.due_at,true)} · ${escape(attemptLabel(pending,apps()))} · ${escape(pending.next_action)}</span></button>`:''}<div id="company-items-${index}" ${open?'':'hidden'}>${open?applicationTable(group.items,true):''}</div></section>`;
@@ -332,7 +331,7 @@ document.addEventListener('click',async event=>{
   const {action,id}=button.dataset;
   if(action==='application-view'){state.applicationView=button.dataset.view;render();return;}
   if(action==='toggle-company'){
-    const key=button.dataset.key;if(button.getAttribute('aria-expanded')==='true'){expandedCompanies.delete(key);collapsedCompanies.add(key);}else{expandedCompanies.add(key);collapsedCompanies.delete(key);}
+    const key=button.dataset.key;if(expandedCompanies.has(key))expandedCompanies.delete(key);else expandedCompanies.add(key);
     render();[...document.querySelectorAll('[data-action="toggle-company"]')].find(b=>b.dataset.key===key)?.focus({preventScroll:true});return;
   }
   if(action==='company-new'){const source=findApp(id);openEditor('new',null,{company:source.company,company_type:source.company_type});return;}
