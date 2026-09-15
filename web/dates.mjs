@@ -60,12 +60,18 @@ export function enhanceDates(root = document) {
       };
       const draw = (focusDay = '') => {
         const year=Number(month.slice(0,4)), monthNumber=Number(month.slice(5));
-        panel.innerHTML=`<header class="date-picker-heading"><span>${withTime?'安排日期与时间':'选择日期'}</span><button type="button" class="date-picker-icon" data-close aria-label="关闭日期选择">${svg('m6 6 12 12M6 18 18 6')}</button></header>
+        if(!panel.firstElementChild)panel.innerHTML=`<header class="date-picker-heading"><span>${withTime?'安排日期与时间':'选择日期'}</span><button type="button" class="date-picker-icon" data-close aria-label="关闭日期选择">${svg('m6 6 12 12M6 18 18 6')}</button></header>
           <div class="date-picker-navigation"><button type="button" class="date-picker-icon date-picker-prev" data-month-offset="-1" aria-label="上个月" ${month<=min.slice(0,7)?'disabled':''}>${chevron}</button><div class="date-picker-month"><label><input type="number" value="${year}" min="${Number(min.slice(0,4))}" max="${Number(max.slice(0,4))}" data-year aria-label="年份"><span>年</span></label><label><input type="number" value="${monthNumber}" min="1" max="12" data-month aria-label="月份"><span>月</span></label></div><button type="button" class="date-picker-icon" data-month-offset="1" aria-label="下个月" ${month>=max.slice(0,7)?'disabled':''}>${chevron}</button></div>
           <div class="date-picker-weekdays" aria-hidden="true">${['一','二','三','四','五','六','日'].map(d=>`<span>${d}</span>`).join('')}</div>
-          <div class="date-picker-grid" role="group" aria-label="日期">${pickerDays(month).map(day=>`<button type="button" data-date="${day}" class="date-picker-day ${day.slice(0,7)!==month?'is-outside':''} ${day===selected?'is-selected':''} ${day===dayKey()?'is-today':''}" aria-label="${day}" aria-pressed="${day===selected}" ${day===dayKey()?'aria-current="date"':''} ${allowed(day)?'':'disabled'} tabindex="${day===(focusDay||selected)?'0':'-1'}">${Number(day.slice(8))}</button>`).join('')}</div>
+          <div class="date-picker-grid" role="group" aria-label="日期"></div>
           ${withTime?`<div class="date-picker-time"><span>时间 <small>24 小时制</small></span><div><input type="number" data-hour min="0" max="23" value="${hour}" aria-label="小时"><span>:</span><input type="number" data-minute min="0" max="59" value="${minute}" aria-label="分钟"></div></div>`:''}
           <footer class="date-picker-footer"><div><button type="button" data-today>今天</button>${!input.required?'<button type="button" data-clear>清空</button>':''}</div>${withTime?'<button type="button" class="date-picker-done" data-done>确定</button>':''}</footer>`;
+        // Keep navigation nodes alive while an input blur and button click are in flight.
+        panel.querySelector('[data-year]').value=String(year);
+        panel.querySelector('[data-month]').value=String(monthNumber);
+        panel.querySelector('[data-month-offset="-1"]').disabled=month<=min.slice(0,7);
+        panel.querySelector('[data-month-offset="1"]').disabled=month>=max.slice(0,7);
+        panel.querySelector('.date-picker-grid').innerHTML=pickerDays(month).map(day=>`<button type="button" data-date="${day}" class="date-picker-day ${day.slice(0,7)!==month?'is-outside':''} ${day===selected?'is-selected':''} ${day===dayKey()?'is-today':''}" aria-label="${day}" aria-pressed="${day===selected}" ${day===dayKey()?'aria-current="date"':''} ${allowed(day)?'':'disabled'} tabindex="${day===(focusDay||selected)?'0':'-1'}">${Number(day.slice(8))}</button>`).join('');
         if(!panel.querySelector('.date-picker-day[tabindex="0"]'))panel.querySelector('.date-picker-day:not(.is-outside):not(:disabled)')?.setAttribute('tabindex','0');
         position();
         if(focusDay)panel.querySelector(`[data-date="${focusDay}"]`)?.focus({preventScroll:true});
@@ -95,7 +101,7 @@ export function enhanceDates(root = document) {
         const y=panel.querySelector('[data-year]'),m=panel.querySelector('[data-month]');
         if(!y.value||!m.value||!y.checkValidity()||!m.checkValidity())return;
         rememberTime();month=`${y.value.padStart(4,'0')}-${m.value.padStart(2,'0')}`;
-        const focus=event.target.hasAttribute('data-year')?'[data-year]':'[data-month]';draw();panel.querySelector(focus).focus({preventScroll:true});
+        draw();
       });
       panel.addEventListener('keydown',event=>{
         if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close(true);return;}
