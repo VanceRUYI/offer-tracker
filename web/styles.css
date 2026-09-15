@@ -89,7 +89,7 @@ kbd { font:10px var(--mono); padding:0 4px; border:1px solid #e2e2e2; border-rad
 .demo-banner[hidden] { display:none; }
 .demo-banner button { border:0; background:none; color:#5c5c5c; white-space:nowrap; font-size:12px; }
 main { width:100%; max-width:1476px; padding:36px 44px 40px; margin:0 auto; flex:1; }
-main:focus { outline:none; }
+main:focus,#scheduleAgenda:focus { outline:none; }
 .page-heading { display:flex; align-items:center; justify-content:space-between; gap:24px; margin:8px 0 35px; }
 .page-heading p { font-size:14px; color:var(--muted); margin-top:13px; line-height:1.8; }
 .page-heading>.button { align-self:flex-end; margin-bottom:3px; }
