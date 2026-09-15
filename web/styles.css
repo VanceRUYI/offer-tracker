@@ -645,7 +645,7 @@ select[hidden] { display:none!important; }
 .calendar-agenda .empty-state { padding:30px 24px 38px; }
 .calendar-agenda .empty-icon { display:none; }
 .calendar-agenda .empty-state h3 { font-size:16px; font-weight:500; }
-.calendar-agenda .empty-state p { margin-bottom:0; }
+.calendar-agenda .empty-state p { margin-bottom:18px; }
 .calendar-agenda .empty-actions:empty { display:none; }
 @media(max-width:700px) {
   .calendar-jump { display:block; padding:0 18px 17px; }
