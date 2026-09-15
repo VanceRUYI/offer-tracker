@@ -21,6 +21,7 @@ ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/styles.css': ('styles.css', 'text/css; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
           '/model.mjs': ('model.mjs', 'text/javascript; charset=utf-8'),
+          '/dates.mjs': ('dates.mjs', 'text/javascript; charset=utf-8'),
           '/selects.mjs': ('selects.mjs', 'text/javascript; charset=utf-8'),
           '/favicon.svg': ('favicon.svg', 'image/svg+xml')}
 

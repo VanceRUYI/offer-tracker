@@ -1,3 +1,4 @@
+import {enhanceDates, closeDatePicker} from './dates.mjs';
 import {enhanceSelects, closeSelectMenu} from './selects.mjs';
 import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
 
@@ -215,7 +216,7 @@ function applyRecognition(){
     if(control){control.value=recognitionPreview.fields[key];const section=control.closest('details');if(section)section.open=true;filled++;}
   });
   if(!filled){notify('先勾选需要填入的信息');return;}
-  enhanceSelects(form);
+  enhanceSelects(form);enhanceDates(form);
   $('#recognitionResult').innerHTML='<p>已填入 '+filled+' 项。核对后点击下方“保存投递”或“保存修改”。</p>';
   recognitionPreview=null;notify('已填入表单，尚未保存');
 }
@@ -227,6 +228,7 @@ function openEditor(mode,id){
   if(state.demo&&mode!=='new'){openDetail(id);return;}
   if(mode==='new'&&state.demo){state.demo=false;$('#drawer').close();render();}
   const app=id?findApp(id):{};if(id&&!app)return;
+  closeDatePicker();
   const editor=$('#editor');editor.dataset.mode=mode;editor.dataset.id=id||'';editor.dataset.recognizing='false';recognitionPreview=null;
   const title=mode==='new'?'新增投递':mode==='edit'?'编辑岗位信息':'添加进展';
   const description=mode==='new'?'先记下公司和岗位，其他信息可以慢慢补。':escape(app.company)+' · '+escape(app.role);
@@ -234,7 +236,7 @@ function openEditor(mode,id){
   if(mode==='event')fields=`<div class="form-grid">${stageField(app.status)}${field('occurred_on','发生日期',dayKey(),'date','',false,true)}${notesField('这次有什么进展？')}${field('next_action','下一步',app.next_action,'text','例如：准备二面、完成测评',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}<p class="field-hint field full">原有待办会保留；完成后可在详情中勾选，也可以在这里修改或清空。</p></div>`;
   else fields=`${recognitionFields(app.url)}<div class="form-grid">${field('company','公司',app.company,'text','例如：公司名称',false,true)}${field('role','岗位',app.role,'text','例如：算法工程师',false,true)}${stageField(app.status||'已投递')}${field('applied_on','投递日期',app.applied_on||dayKey(),'date','',false,true)}${field('next_action','下一步',app.next_action,'text','例如：完成测评、等待面试通知',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}</div><details class="optional-fields" ${mode==='edit'?'open':''}><summary>更多信息 · 企业性质、城市与备注</summary><div class="form-grid">${companyTypeField(app)}${field('city','城市',app.city,'text','例如：北京 / 上海')}${field('channel','投递渠道',app.channel,'text','例如：官网 / 内推')}${field('resume','使用的简历',app.resume,'text','例如：算法岗 v3')}${notesField('岗位备注',app.note)}</div></details>`;
   editor.innerHTML=`<form id="recordForm"><div class="dialog-heading"><div><h2 id="editorTitle">${title}</h2><p>${description}</p></div><button type="button" class="icon-button" data-action="close-editor" aria-label="关闭编辑">${icon('close')}</button></div><div class="form-content">${fields}<p id="formError" class="form-error" role="alert" hidden></p></div><div class="dialog-footer">${mode!=='event'?`<label class="checkbox-label"><input type="checkbox" name="priority" ${app.priority==='重点关注'?'checked':''}>重点关注</label>`:''}<div class="actions"><button type="button" class="button" data-action="close-editor">取消</button><button class="button primary" type="submit">${mode==='new'?'保存投递':mode==='event'?'保存进展':'保存修改'}</button></div></div></form>`;
-  enhanceSelects(editor);
+  enhanceSelects(editor);enhanceDates(editor);
   formSnapshot=JSON.stringify([...new FormData($('#recordForm'))]);
   if(!editor.open)editor.showModal();editor.scrollTop=0;
 }

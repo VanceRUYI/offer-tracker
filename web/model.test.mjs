@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, pickerDays, dateValue, taskGroups, filterApps, waitingApps} from './model.mjs';
 
 test('date picker clamps month-end dates and validates year, month, and day', () => {
   assert.equal(calendarDate(2026,2,31),'2026-02-28');
@@ -87,4 +87,21 @@ test('waiting excludes not-yet-applied and ended applications', () => {
   const base={updated_at:'2026-08-01T10:00:00',next_action:''};
   const result=waitingApps([{...base,id:1,status:'已投递'}, {...base,id:2,status:'待投递'}, {...base,id:3,status:'已结束'}],new Date(2026,8,15));
   assert.deepEqual(result.map(x=>x.id),[1]);
+});
+
+test('date picker includes leap days and adjacent year dates', () => {
+  const days=pickerDays('2024-02');
+  assert.equal(days.length,42);
+  assert.equal(days[0],'2024-01-29');
+  assert.ok(days.includes('2024-02-29'));
+  assert.equal(pickerDays('2027-01')[0],'2026-12-28');
+});
+
+test('date selection preserves local minutes and rejects invalid dates or times', () => {
+  assert.equal(dateValue('2028-02-29','0','5',true),'2028-02-29T00:05');
+  assert.equal(dateValue('2027-01-01','23','59',true),'2027-01-01T23:59');
+  assert.equal(dateValue('2027-01-01','','',false),'2027-01-01');
+  for(const args of [['2027-02-29','9','00'],['2028-02-30','9','00'],['2027-01-01','','00'],['2027-01-01','24','00'],['2027-01-01','9','60'],['2027-01-01','-1','00']]){
+    assert.equal(dateValue(...args,true),'');
+  }
 });

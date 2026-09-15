@@ -57,3 +57,15 @@ export function filterApps(apps, {query='',status='',priority=false,sort='newest
 export function waitingApps(apps, now=new Date()) {
   return apps.filter(a=>['已投递','筛选中','一面','二面','终面','HR面','待确认'].includes(a.status) && !a.next_action && (now-new Date(a.updated_at))/86400000>=14).sort((a,b)=>a.updated_at.localeCompare(b.updated_at));
 }
+
+export function pickerDays(month) {
+  const first = month+'-01';
+  const offset = (new Date(first+'T12:00:00').getDay()+6)%7;
+  return Array.from({length:42}, (_,i)=>shiftDay(first,i-offset));
+}
+export function dateValue(day, hour, minute, withTime) {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day) || dayKey(new Date(day+'T12:00:00'))!==day)return '';
+  if(!withTime)return day;
+  if(!/^\d{1,2}$/.test(String(hour)) || !/^\d{1,2}$/.test(String(minute)) || Number(hour)>23 || Number(minute)>59)return '';
+  return `${day}T${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+}
