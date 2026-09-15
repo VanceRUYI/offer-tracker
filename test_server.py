@@ -60,6 +60,17 @@ class HTTPTests(unittest.TestCase):
         for path in ('/data/workbench.sqlite3', '/../store.py', '/server.py'):
             self.assertEqual(self.request('GET', path)[0], 404)
 
+    def test_frontend_select_module_is_served_as_javascript(self):
+        con = HTTPConnection('127.0.0.1', self.server.server_port)
+        try:
+            con.request('GET', '/selects.mjs')
+            response = con.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertIn('javascript', response.getheader('Content-Type'))
+            self.assertIn(b'export function enhanceSelects', response.read())
+        finally:
+            con.close()
+
     def test_bad_request_and_missing_record_are_reported(self):
         self.assertEqual(self.request('POST', '/api/applications', {'company': ''})[0], 400)
         self.assertEqual(self.request('PATCH', '/api/applications/missing', {'note': 'abc'})[0], 404)
