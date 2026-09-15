@@ -135,7 +135,7 @@ function overview(){
   let schedule='';
   if(scheduleDay){const items=all.filter(a=>a.next_action&&a.status!=='已结束'&&a.due_at?.slice(0,10)===scheduleDay).sort((a,b)=>a.due_at.localeCompare(b.due_at));schedule=items.length?taskSection('当天待办',items):empty('这一天还没有安排','在投递详情中设置下一步和时间，就会出现在日历里。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button>','calendar');}
   else{schedule=taskSection('已逾期',groups.overdue,'overdue')+taskSection('今天',groups.today)+taskSection('未来几天',groups.week)+(state.scope==='all'?taskSection('更晚的安排',groups.later):'')+taskSection('时间待定',groups.unscheduled);}
-  if(!schedule)schedule=all.length?empty('近期安排已清空','有新的笔试、面试或待办时，在岗位里添加进展就好。','<button class="button" data-nav="applications">查看投递记录</button>','calendar'):empty('从第一份投递开始','记下公司和岗位，后续的通知、面试和复盘都能接着记录。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-action="demo">看看示例</button>');
+  if(!schedule)schedule=all.length?empty('近期安排已清空','有新的笔试、面试或待办时，在岗位里添加进展就好。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-nav="applications">查看投递记录</button>','calendar'):empty('从第一份投递开始','记下公司和岗位，后续的通知、面试和复盘都能接着记录。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-action="demo">看看示例</button>');
   const recent=all.flatMap(a=>(a.events||[]).map(e=>({...e,app:a}))).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,5);
   const waiting=waitingApps(all);
   return heading('近期安排',dateText+' · '+(groups.overdue.length?`${groups.overdue.length} 项安排需要处理`:groups.today.length?`今天有 ${groups.today.length} 项安排`:'今天也按自己的节奏来'),`<div class="date-label">${today.replaceAll('-',' / ')}</div>`)+
