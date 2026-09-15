@@ -1,6 +1,6 @@
 import {enhanceDates, closeDatePicker} from './dates.mjs';
 import {enhanceSelects, closeSelectMenu} from './selects.mjs';
-import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, taskGroups, filterApps, waitingApps, companyKey, groupCompanies, matchingCompanies, attemptLabel} from './model.mjs';
 
 const $ = (s, root=document) => root.querySelector(s);
 const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -42,6 +42,8 @@ const initialRoute=location.hash.slice(1);
 const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',sort:'newest',day:'',scope:'week',calendarView:'week',calendarMonth:dayKey().slice(0,7),error:''};
 let demoApps=[], toastTimer, createdHighlightTimer, formSnapshot='', recognitionPreview=null;
 state.createdId='';
+state.applicationView='companies';
+const expandedCompanies=new Set(), collapsedCompanies=new Set();
 let personalization=null, personalSnapshot='';
 const apps=()=>state.demo?demoApps:state.apps;
 const findApp=id=>apps().find(a=>a.id===id);
@@ -59,7 +61,7 @@ async function request(path,method='GET',body){
   try{response=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Workbench':'1'},body:body===undefined?undefined:JSON.stringify(body)});}
   catch{throw new Error('连接已断开，请重新启动工作台后再试。未保存的输入会保留。');}
   const data=await response.json().catch(()=>({error:'收到异常响应，请重试'}));
-  if(!response.ok)throw new Error(data.error||'操作未完成，请重试');
+  if(!response.ok){const error=new Error(data.error||'操作未完成，请重试');error.duplicates=data.duplicates;throw error;}
   return data;
 }
 function navigate(route){state.route=route;state.day='';if(location.hash!=='#'+route)history.replaceState(null,'','#'+route);render();}
@@ -72,6 +74,7 @@ function acceptApp(app){const i=state.apps.findIndex(a=>a.id===app.id);if(i<0)st
 function revealCreatedApplication(id){
   clearTimeout(createdHighlightTimer);
   Object.assign(state,{query:'',status:'',priority:false,company_type:'',sort:'newest',createdId:id});
+  expandedCompanies.add(companyKey(findApp(id)?.company));
   $('#globalSearch').value='';$('#drawer').close();navigate('applications');
   document.querySelector(`[data-application-id="${CSS.escape(id)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
   createdHighlightTimer=setTimeout(()=>{
@@ -121,7 +124,7 @@ function monthCalendar(all){
     ${calendarJumpForm(selected)}<div class="calendar-weekdays" aria-hidden="true">${['周一','周二','周三','周四','周五','周六','周日'].map(d=>`<span>${d}</span>`).join('')}</div>
     <div class="month-grid" role="group" aria-labelledby="calendar-month-label">${days.map(({day,inMonth,items})=>`<div class="calendar-cell ${inMonth?'':'outside-month'} ${day===selected?'is-selected':''}">
       <button class="calendar-date ${day===today?'is-today':''}" data-action="calendar-day" data-day="${day}" aria-label="${day}，${items.length} 项安排" aria-pressed="${day===selected}" ${day===today?'aria-current="date"':''}><time datetime="${day}">${Number(day.slice(8))}</time>${items.length?`<span class="calendar-day-count">${items.length} 项</span>`:''}</button>
-      <div class="calendar-events">${items.slice(0,2).map(a=>`<button class="calendar-event ${tone(a.status)||'active'}" data-action="detail" data-id="${escape(a.id)}" aria-label="${escape(a.due_at.replace('T',' '))}，${escape(a.company)}，${escape(a.next_action)}" title="${escape(a.due_at.slice(11,16)+' · '+a.company+' · '+a.next_action)}"><span class="calendar-event-meta"><time>${escape(a.due_at.slice(11,16))}</time><span>${escape(a.company)}</span></span><span class="calendar-event-title">${escape(a.next_action)}</span></button>`).join('')}</div>
+      <div class="calendar-events">${items.slice(0,2).map(a=>`<button class="calendar-event ${tone(a.status)||'active'}" data-action="detail" data-id="${escape(a.id)}" aria-label="${escape(a.due_at.replace('T',' '))}，${escape(a.company)}，${escape(attemptLabel(a,apps()))}，${escape(a.next_action)}" title="${escape(a.due_at.slice(11,16)+' · '+a.company+' · '+attemptLabel(a,apps())+' · '+a.next_action)}"><span class="calendar-event-meta"><time>${escape(a.due_at.slice(11,16))}</time><span>${escape(a.company)}</span></span><span class="calendar-event-title">${escape(attemptLabel(a,apps()))} · ${escape(a.next_action)}</span></button>`).join('')}</div>
       ${items.length>2?`<button class="calendar-more desktop-more" data-action="calendar-day" data-day="${day}" aria-label="查看 ${day} 全部 ${items.length} 项安排">另 ${items.length-2} 项</button>`:''}${items.length>1?`<button class="calendar-more mobile-more" data-action="calendar-day" data-day="${day}" aria-label="查看 ${day} 全部 ${items.length} 项安排">另 ${items.length-1} 项</button>`:''}</div>`).join('')}</div>
     <div class="calendar-footnote"><span>点日期看当天清单，点安排查看投递</span><span>未定时间的待办在下方列出</span></div></section>`;
 }
@@ -144,24 +147,34 @@ function overview(){
   const recent=all.flatMap(a=>(a.events||[]).map(e=>({...e,app:a}))).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,5);
   const waiting=waitingApps(all);
   return heading('近期安排',dateText+' · '+(groups.overdue.length?`${groups.overdue.length} 项安排需要处理`:groups.today.length?`今天有 ${groups.today.length} 项安排`:escape(personalization.values.tagline)),`<div class="date-label">${today.replaceAll('-',' / ')}</div>`)+
-    `<section class="stats" aria-label="投递概览">${stats.map(([name,n,symbol,filter])=>`<button class="stat" data-action="stat" data-filter="${filter}"><span class="stat-label">${name}</span><span class="stat-number">${n}<em>份</em></span>${icon(symbol)}</button>`).join('')}</section>
+    `<section class="stats" aria-label="投递概览">${stats.map(([name,n,symbol,filter])=>`<button class="stat" data-action="stat" data-filter="${filter}"><span class="stat-label">${name}</span><span class="stat-number">${n}<em>次</em></span>${name==='全部投递'?`<small class="stat-companies">涉及 ${groupCompanies(all).length} 家公司</small>`:''}${icon(symbol)}</button>`).join('')}</section>
     ${state.calendarView==='month'?monthCalendar(all):''}<div class="overview-grid"><section id="scheduleAgenda" tabindex="-1" class="panel ${state.calendarView==='month'?'calendar-agenda':''}" aria-label="待办清单">${state.calendarView==='month'?`<div class="panel-head"><h2>${new Date(scheduleDay+'T12:00:00').toLocaleDateString('zh-CN',{month:'long',day:'numeric',weekday:'long'})}</h2><small>${scheduleDay.slice(0,4)}</small></div>`:`${calendarViewHeader()}<div class="week-strip">${week}</div><div class="schedule-toolbar"><span>${state.day?prettyDate(state.day):'待办安排'}${state.day?'<button class="text-button" data-action="clear-day">显示全部</button>':''}</span><div class="segmented" aria-label="安排范围"><button data-action="scope" data-scope="week" class="${state.scope==='week'?'active':''}">未来七天</button><button data-action="scope" data-scope="all" class="${state.scope==='all'?'active':''}">全部安排</button></div></div>`}${schedule}${state.calendarView==='month'?taskSection('时间待定',groups.unscheduled):''}</section>
-    <aside class="right-stack"><section class="panel"><div class="panel-head"><h2>最近进展</h2>${icon('clock')}</div>${recent.length?`<div class="recent-list">${recent.map(e=>`<div class="recent-entry"><button data-action="detail" data-id="${escape(e.app.id)}">${escape(e.app.company)} · ${escape(e.app.role)}</button><p>${e.kind==='task'?'完成待办':escape(e.status)}</p><time>${prettyDate(e.occurred_on)}</time></div>`).join('')}</div>`:'<p class="mini-empty">添加进展后，这里会留下每一步的记录。</p>'}</section>
-    <section class="panel"><div class="panel-head"><h2>等一份回音</h2><small>14 天未更新</small></div>${waiting.length?`<div class="follow-list">${waiting.slice(0,5).map(a=>`<div class="follow-row"><button data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}<small>${escape(a.role)}</small></button><span class="follow-days">${Math.floor((Date.now()-new Date(a.updated_at))/86400000)} 天</span></div>`).join('')}</div>`:'<p class="mini-empty">暂时没有长时间未更新的投递。<br>收到回复，再记一笔。</p>'}</section><div class="note-block personal-note"><button class="icon-button note-edit" data-action="personalize" aria-label="编辑寄语与图标" title="编辑寄语与图标">${icon('edit')}</button><strong>${icon(personalization.values.icon)}${escape(personalization.values.title)}</strong><div class="personal-note-body">${escape(personalization.values.body)}</div></div></aside></div>`;
+    <aside class="right-stack"><section class="panel"><div class="panel-head"><h2>最近进展</h2>${icon('clock')}</div>${recent.length?`<div class="recent-list">${recent.map(e=>`<div class="recent-entry"><button data-action="detail" data-id="${escape(e.app.id)}">${escape(e.app.company)} · ${escape(attemptLabel(e.app,apps()))}</button><p>${e.kind==='task'?'完成待办':escape(e.status)}</p><time>${prettyDate(e.occurred_on)}</time></div>`).join('')}</div>`:'<p class="mini-empty">添加进展后，这里会留下每一步的记录。</p>'}</section>
+    <section class="panel"><div class="panel-head"><h2>等一份回音</h2><small>14 天未更新</small></div>${waiting.length?`<div class="follow-list">${waiting.slice(0,5).map(a=>`<div class="follow-row"><button data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}<small>${escape(attemptLabel(a,apps()))}</small></button><span class="follow-days">${Math.floor((Date.now()-new Date(a.updated_at))/86400000)} 天</span></div>`).join('')}</div>`:'<p class="mini-empty">暂时没有长时间未更新的投递。<br>收到回复，再记一笔。</p>'}</section><div class="note-block personal-note"><button class="icon-button note-edit" data-action="personalize" aria-label="编辑寄语与图标" title="编辑寄语与图标">${icon('edit')}</button><strong>${icon(personalization.values.icon)}${escape(personalization.values.title)}</strong><div class="personal-note-body">${escape(personalization.values.body)}</div></div></aside></div>`;
 }
-function taskSection(label,list,extra=''){return list.length?`<section class="task-group"><div class="group-label ${extra}">${label}<span class="count">${list.length}</span></div>${list.map(a=>`<div class="task-row"><button class="complete-button" data-action="complete" data-id="${escape(a.id)}" aria-label="完成：${escape(a.next_action)}" ${state.demo?'disabled':''}>${icon('check')}</button><button class="task-info" data-action="detail" data-id="${escape(a.id)}"><strong>${escape(a.next_action)}</strong><small>${escape(a.company)} · ${escape(a.role)}</small></button><div class="task-meta"><time class="task-time ${isLate(a)?'late':''}">${timeLabel(a)}</time>${badge(a.status)}</div><button class="icon-button task-edit" data-action="event" data-id="${escape(a.id)}" aria-label="更新${escape(a.company)}的进展">${icon('chevron')}</button></div>`).join('')}</section>`:'';}
+function taskSection(label,list,extra=''){return list.length?`<section class="task-group"><div class="group-label ${extra}">${label}<span class="count">${list.length}</span></div>${list.map(a=>`<div class="task-row"><button class="complete-button" data-action="complete" data-id="${escape(a.id)}" aria-label="完成：${escape(a.next_action)}" ${state.demo?'disabled':''}>${icon('check')}</button><button class="task-info" data-action="detail" data-id="${escape(a.id)}"><strong>${escape(a.next_action)}</strong><small>${escape(a.company)} · ${escape(attemptLabel(a,apps()))}</small></button><div class="task-meta"><time class="task-time ${isLate(a)?'late':''}">${timeLabel(a)}</time>${badge(a.status)}</div><button class="icon-button task-edit" data-action="event" data-id="${escape(a.id)}" aria-label="更新${escape(a.company)}的进展">${icon('chevron')}</button></div>`).join('')}</section>`:'';}
+function applicationTable(records,inGroup=false){return `<div class="table-scroll"><table><thead><tr><th scope="col">${inGroup?'岗位 / 批次':'公司 / 岗位'}</th><th scope="col">当前阶段</th><th scope="col">城市</th><th scope="col">投递入口</th><th scope="col">下一步</th><th scope="col">投递日期</th><th scope="col">操作</th></tr></thead><tbody>${records.map(a=>`<tr data-application-id="${escape(a.id)}" class="${state.createdId===a.id?'is-new-record':''}"><td class="identity-cell"><div class="company-cell">${logo(a)}<div><button class="company-name" data-action="detail" data-id="${escape(a.id)}">${escape(inGroup?a.role:a.company)}</button>${state.createdId===a.id?'<span class="new-record-label">刚刚新增</span>':''}<small>${escape(inGroup?(attemptLabel(a,apps()).slice(a.role.length).replace(/^ · /,'')||a.applied_on):attemptLabel(a,apps()))}</small>${inGroup?'':companyTags(a)}</div></div></td><td class="stage-cell"><select class="badge status-select ${tone(a.status)}" data-status-id="${escape(a.id)}" aria-label="${escape(a.company)} ${escape(attemptLabel(a,apps()))}的当前阶段" ${state.demo?'disabled':''}>${options(STATUSES,a.status)}</select></td><td class="cell-muted city-cell" data-label="城市">${escape(a.city)||'未填写'}</td><td class="link-cell" data-label="投递入口">${applicationLink(a)}</td><td class="table-next" data-label="下一步">${a.next_action?`<strong>${escape(a.next_action)}</strong><small class="${isLate(a)?'overdue':''}">${prettyDate(a.due_at,true)}</small>`:`<button class="text-button" data-action="event" data-id="${escape(a.id)}">${state.demo?'查看进展':'+ 添加下一步'}</button>`}</td><td class="cell-muted applied-cell" data-label="投递日期">${escape(a.applied_on).replaceAll('-','/')}</td><td class="actions-cell"><div class="row-actions"><button class="icon-button priority-button ${a.priority==='重点关注'?'starred':''}" data-action="star" data-id="${escape(a.id)}" aria-label="${a.priority==='重点关注'?'取消重点关注':'重点关注'}${escape(a.company)}" aria-pressed="${a.priority==='重点关注'}" ${state.demo?'disabled':''}>${icon('star')}</button><button class="icon-button" data-action="detail" data-id="${escape(a.id)}" aria-label="查看${escape(a.company)} ${escape(attemptLabel(a,apps()))}">${icon('chevron')}</button></div></td></tr>`).join('')}</tbody></table></div>`;}
+function companyGroupsView(records){
+  const totals=new Map(groupCompanies(apps()).map(g=>[g.key,g.items.length]));
+  return `<div class="company-groups">${groupCompanies(records).map((group,index)=>{
+    const open=expandedCompanies.has(group.key)||(group.items.length===1&&!collapsedCompanies.has(group.key)), first=group.items[0];
+    const pending=group.items.filter(a=>a.next_action&&a.due_at&&a.status!=='已结束').sort((a,b)=>a.due_at.localeCompare(b.due_at))[0];
+    const size=totals.get(group.key), count=size===group.items.length?`${size} 次投递`:`匹配 ${group.items.length} / ${size} 次投递`;
+    return `<section class="company-group"><div class="company-group-head"><button class="company-group-toggle" data-action="toggle-company" data-key="${escape(group.key)}" aria-expanded="${open}" aria-controls="company-items-${index}"><span class="group-chevron ${open?'expanded':''}">${icon('chevron')}</span>${logo(first)}<span class="company-group-identity"><strong>${escape(group.company)}</strong><small>${count} · ${group.active} 项进行中</small></span></button><button class="button small company-add" data-action="${state.demo?'new':'company-new'}" data-id="${escape(first.id)}">${icon('plus')}${state.demo?'记录我的投递':'添加投递'}</button></div>${pending?`<button class="company-next" data-action="detail" data-id="${escape(pending.id)}">${icon('calendar')}<span>${isLate(pending)?'逾期待办':'最近安排'}：${prettyDate(pending.due_at,true)} · ${escape(attemptLabel(pending,apps()))} · ${escape(pending.next_action)}</span></button>`:''}<div id="company-items-${index}" ${open?'':'hidden'}>${open?applicationTable(group.items,true):''}</div></section>`;
+  }).join('')}</div>`;
+}
 function applications(){
   let filtered=filterApps(apps(),{query:state.query,status:state.status==='面试阶段'?'':state.status,priority:state.priority,sort:state.sort,company_type:state.company_type});
   if(state.status==='面试阶段')filtered=filtered.filter(a=>INTERVIEWS.includes(a.status));
   const tabs=[['','全部'],['进行中','进行中'],['面试阶段','面试'],['Offer','Offer'],['已结束','已结束']];
   const selectStatus=tabs.some(([key])=>state.status===key)?'':state.status;
-  return heading('投递记录',`共 ${apps().length} 份记录 · 随时补充进展，保留完整过程。`,`<button class="button" data-action="refresh">${icon('refresh')}刷新</button>`)+
+  return heading('投递记录',`投递 ${apps().length} 次 · 涉及 ${groupCompanies(apps()).length} 家公司`,`<button class="button" data-action="refresh">${icon('refresh')}刷新</button>`)+
     (state.query?`<div class="search-summary">搜索“${escape(state.query)}”<button class="text-button" data-action="clear-search">清除搜索</button></div>`:'')+
     `<section class="panel table-panel"><div class="table-toolbar"><div class="filter-tabs" aria-label="筛选阶段">${tabs.map(([key,name])=>`<button class="filter-tab ${state.status===key?'active':''}" data-action="filter" data-filter="${key}" aria-pressed="${state.status===key}">${name}</button>`).join('')}</div><div class="filter-tools"><button class="star-filter ${state.priority?'active':''}" data-action="priority-filter" aria-pressed="${state.priority}">${icon('star')}重点关注</button><select id="stageFilter" class="compact-select" aria-label="按具体阶段筛选"><option value="">具体阶段</option>${options(STATUSES,selectStatus)}</select><select id="sortSelect" class="compact-select" aria-label="排序方式">${[['newest','最近投递'],['due','安排时间'],['company','公司名称']].map(([value,name])=>`<option value="${value}" ${state.sort===value?'selected':''}>${name}</option>`).join('')}</select></div></div>
-    ${classificationFilters()}${filtered.length?`<div class="table-scroll"><table><thead><tr><th scope="col">公司 / 岗位</th><th scope="col">当前阶段</th><th scope="col">城市</th><th scope="col">投递入口</th><th scope="col">下一步</th><th scope="col">投递日期</th><th scope="col">操作</th></tr></thead><tbody>${filtered.map(a=>`<tr data-application-id="${escape(a.id)}" class="${state.createdId===a.id?'is-new-record':''}"><td class="identity-cell"><div class="company-cell">${logo(a)}<div><button class="company-name" data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}</button>${state.createdId===a.id?'<span class="new-record-label">刚刚新增</span>':''}<small>${escape(a.role)}</small>${companyTags(a)}</div></div></td><td class="stage-cell"><select class="badge status-select ${tone(a.status)}" data-status-id="${escape(a.id)}" aria-label="${escape(a.company)} ${escape(a.role)}的当前阶段" ${state.demo?'disabled':''}>${options(STATUSES,a.status)}</select></td><td class="cell-muted city-cell" data-label="城市">${escape(a.city)||'未填写'}</td><td class="link-cell" data-label="投递入口">${applicationLink(a)}</td><td class="table-next" data-label="下一步">${a.next_action?`<strong>${escape(a.next_action)}</strong><small class="${isLate(a)?'overdue':''}">${prettyDate(a.due_at,true)}</small>`:`<button class="text-button" data-action="event" data-id="${escape(a.id)}">${state.demo?'查看进展':'+ 添加下一步'}</button>`}</td><td class="cell-muted applied-cell" data-label="投递日期">${escape(a.applied_on).replaceAll('-','/')}</td><td class="actions-cell"><div class="row-actions"><button class="icon-button priority-button ${a.priority==='重点关注'?'starred':''}" data-action="star" data-id="${escape(a.id)}" aria-label="${a.priority==='重点关注'?'取消重点关注':'重点关注'}${escape(a.company)}" aria-pressed="${a.priority==='重点关注'}" ${state.demo?'disabled':''}>${icon('star')}</button><button class="icon-button" data-action="detail" data-id="${escape(a.id)}" aria-label="查看${escape(a.company)} ${escape(a.role)}">${icon('chevron')}</button></div></td></tr>`).join('')}</tbody></table></div>`:apps().length?empty('没有找到符合条件的投递','试试其他关键词，或者清除筛选条件。','<button class="button" data-action="reset-filters">清除筛选</button>','search'):empty('第一份投递，从这里记起','只需公司和岗位，其他信息可以之后补充。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button>')}
-    <div class="table-footer"><span>显示 ${filtered.length} / ${apps().length} 份投递</span><span>点击公司查看详情 · 修改阶段会自动记入时间线</span></div></section>`;
+    ${classificationFilters()}<div class="application-view-bar"><span>${state.applicationView==='companies'?'同公司收在一起，每次投递独立跟进':'所有投递，逐条查看'}</span><div class="segmented" aria-label="投递展示方式">${[['companies','按公司'],['flat','按投递']].map(([view,label])=>`<button data-action="application-view" data-view="${view}" class="${state.applicationView===view?'active':''}" aria-pressed="${state.applicationView===view}">${label}</button>`).join('')}</div></div>${filtered.length?(state.applicationView==='companies'?companyGroupsView(filtered):applicationTable(filtered)):apps().length?empty('没有找到符合条件的投递','试试其他关键词，或者清除筛选条件。','<button class="button" data-action="reset-filters">清除筛选</button>','search'):empty('第一份投递，从这里记起','只需公司和岗位，其他信息可以之后补充。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button>')}
+    <div class="table-footer"><span>显示 ${filtered.length} / ${apps().length} 份投递</span><span>点击岗位查看详情 · 每次投递独立记录进展</span></div></section>`;
 }
-function backup(){return heading('数据备份','你的记录，由你保管。随时导出，安心保存。')+`<div class="backup-grid"><section class="panel backup-card">${icon('download')}<h2>导出我的记录</h2><p>完整备份包含岗位信息和所有进展；表格适合查看、整理，或分享给别人。</p><button class="button primary" data-action="export-json">${icon('download')}完整备份 JSON</button><button class="button" data-action="export-csv">导出表格 CSV</button><p class="field-hint">当前有 ${state.apps.length} 份真实投递记录。CSV 不包含完整时间线。</p></section><section class="panel backup-card">${icon('upload')}<h2>从备份恢复</h2><p>选择本工作台导出的 JSON 文件。只补充缺少的投递；已有编号或相同公司、岗位的记录会跳过；个性化设置仅在本机尚未设置时恢复。</p><button class="button" data-action="import">${icon('upload')}选择备份文件</button><p class="field-hint">导入前会自动备份当前数据。</p></section></div><section class="storage-info"><h2>本地保存，随时带走</h2><div class="info-line">${icon('harddrive')}<div><p>记录保存在应用文件夹里的 <code>data/workbench.sqlite3</code>。关闭页面后数据仍然保留。</p></div></div><div class="info-line">${icon('shield')}<div><p>每天首次启动时生成一次快照；导入和删除前也会备份，存放在 <code>data/backups/</code>。</p><p>建议偶尔下载完整备份，另外存一份。更换电脑时，可在新的工作台里导入。</p></div></div><div class="info-line">${icon('clock')}<div><p>当前版本的安排展示在页面内。关闭工作台后，不会发送系统通知。</p></div></div></section>`;}
+function backup(){return heading('数据备份','你的记录，由你保管。随时导出，安心保存。')+`<div class="backup-grid"><section class="panel backup-card">${icon('download')}<h2>导出我的记录</h2><p>完整备份包含岗位信息和所有进展；表格适合查看、整理，或分享给别人。</p><button class="button primary" data-action="export-json">${icon('download')}完整备份 JSON</button><button class="button" data-action="export-csv">导出表格 CSV</button><p class="field-hint">当前有 ${state.apps.length} 份真实投递记录。CSV 不包含完整时间线。</p></section><section class="panel backup-card">${icon('upload')}<h2>从备份恢复</h2><p>选择本工作台导出的 JSON 文件。只补充缺少的投递；新版备份按记录编号去重，保留同岗位的多次投递；旧版备份沿用公司与岗位去重；个性化设置仅在本机尚未设置时恢复。</p><button class="button" data-action="import">${icon('upload')}选择备份文件</button><p class="field-hint">导入前会自动备份当前数据。</p></section></div><section class="storage-info"><h2>本地保存，随时带走</h2><div class="info-line">${icon('harddrive')}<div><p>记录保存在应用文件夹里的 <code>data/workbench.sqlite3</code>。关闭页面后数据仍然保留。</p></div></div><div class="info-line">${icon('shield')}<div><p>每天首次启动时生成一次快照；导入和删除前也会备份，存放在 <code>data/backups/</code>。</p><p>建议偶尔下载完整备份，另外存一份。更换电脑时，可在新的工作台里导入。</p></div></div><div class="info-line">${icon('clock')}<div><p>当前版本的安排展示在页面内。关闭工作台后，不会发送系统通知。</p></div></div></section>`;}
 function applicationLink(app, detail=false){
   if(!app.url){
     if(state.demo)return '<span class="cell-muted">未附链接</span>';
@@ -175,14 +188,14 @@ function renderDrawer(app){
   const d=$('#drawer'),scroll=d.scrollTop;
   d.dataset.id=app.id;
   const events=[...(app.events||[])].sort((a,b)=>b.occurred_on.localeCompare(a.occurred_on)||b.created_at.localeCompare(a.created_at));
-  d.innerHTML=`<div class="drawer-top"><span>投递详情${state.demo?' · 示例':''}</span><button class="icon-button" data-action="close-drawer" aria-label="关闭详情">${icon('close')}</button></div><div class="drawer-body"><div class="detail-identity">${logo(app,true)}<div><h2 id="drawerTitle">${escape(app.company)}</h2><p>${escape(app.role)}</p></div></div><div class="detail-badges">${badge(app.status)}${app.priority==='重点关注'?'<span class="badge assessment">'+icon('star')+'重点关注</span>':''}${app.city?'<span class="badge">'+escape(app.city)+'</span>':''}</div><div class="detail-actions">${state.demo?'<button class="button primary" data-action="new">创建我的投递</button>':`<button class="button primary" data-action="event" data-id="${escape(app.id)}">${icon('plus')}添加进展</button><button class="button" data-action="edit" data-id="${escape(app.id)}">${icon('edit')}编辑信息</button>`}</div><div class="detail-website">${applicationLink(app,true)}</div>
+  d.innerHTML=`<div class="drawer-top"><span>投递详情${state.demo?' · 示例':''}</span><button class="icon-button" data-action="close-drawer" aria-label="关闭详情">${icon('close')}</button></div><div class="drawer-body"><div class="detail-identity">${logo(app,true)}<div><h2 id="drawerTitle">${escape(app.company)}</h2><p>${escape(attemptLabel(app,apps()))}</p></div></div><div class="detail-badges">${badge(app.status)}${app.priority==='重点关注'?'<span class="badge assessment">'+icon('star')+'重点关注</span>':''}${app.city?'<span class="badge">'+escape(app.city)+'</span>':''}</div><div class="detail-actions">${state.demo?'<button class="button primary" data-action="new">创建我的投递</button>':`<button class="button primary" data-action="event" data-id="${escape(app.id)}">${icon('plus')}添加进展</button><button class="button" data-action="edit" data-id="${escape(app.id)}">${icon('edit')}编辑信息</button>`}</div><div class="detail-website">${applicationLink(app,true)}</div>
     ${app.next_action?`<section class="next-box"><div class="next-box-head"><span>下一步</span>${icon('calendar')}</div><h3>${escape(app.next_action)}</h3><p>${prettyDate(app.due_at,true)}${isLate(app)?' · 已逾期':''}</p>${state.demo?'':`<button class="button small" data-action="complete" data-id="${escape(app.id)}">${icon('check')}标记完成</button>`}</section>`:''}
-    <dl class="details-grid">${[['企业性质',app.company_type],['投递日期',app.applied_on],['投递渠道',app.channel],['简历版本',app.resume],['城市',app.city]].map(([k,v])=>`<div><dt>${k}</dt><dd>${escape(v)||'未填写'}</dd></div>`).join('')}</dl>${app.note?`<section class="detail-section"><h3>岗位备注</h3><p class="detail-note">${escape(app.note)}</p></section>`:''}
+    <dl class="details-grid">${[['企业性质',app.company_type],['批次',app.batch],['投递日期',app.applied_on],['投递渠道',app.channel],['简历版本',app.resume],['城市',app.city]].map(([k,v])=>`<div><dt>${k}</dt><dd>${escape(v)||'未填写'}</dd></div>`).join('')}</dl>${app.note?`<section class="detail-section"><h3>岗位备注</h3><p class="detail-note">${escape(app.note)}</p></section>`:''}
     <section class="detail-section"><h3>进展时间线 <span class="muted">${events.length} 条</span></h3><div class="timeline">${events.map(e=>`<article class="timeline-entry"><header><span>${e.kind==='task'?'完成待办':escape(e.status)}</span><time>${escape(e.occurred_on)}</time></header><p>${escape(e.note)}</p></article>`).join('')}</div></section>${state.demo?'':`<button class="delete-link" data-action="delete" data-id="${escape(app.id)}">删除这份投递</button>`}</div>`;
   d.scrollTop=scroll;
 }
 function openDetail(id){const app=findApp(id);if(!app)return;renderDrawer(app);if(!$('#drawer').open){$('#drawer').showModal();$('#drawer').scrollTop=0;}}
-function field(name,label,value='',type='text',placeholder='',full=false,required=false){return `<div class="field ${full?'full':''}"><label for="f-${name}">${label}${required?'':'<small>选填</small>'}</label><input id="f-${name}" name="${name}" type="${type}" value="${escape(value)}" placeholder="${escape(placeholder)}" ${required?'required':''} ${['date','datetime-local'].includes(type)?'min="1900-01-01" max="9999-12-31'+(type==='datetime-local'?'T23:59':'')+'"':''} maxlength="${name==='company'?160:name==='role'?200:2000}"></div>`;}
+function field(name,label,value='',type='text',placeholder='',full=false,required=false){return `<div class="field ${full?'full':''}"><label for="f-${name}">${label}${required?'':'<small>选填</small>'}</label><input id="f-${name}" name="${name}" type="${type}" value="${escape(value)}" placeholder="${escape(placeholder)}" ${required?'required':''} ${['date','datetime-local'].includes(type)?'min="1900-01-01" max="9999-12-31'+(type==='datetime-local'?'T23:59':'')+'"':''} maxlength="${name==='company'?160:name==='role'?200:name==='batch'?80:2000}"></div>`;}
 function recognitionFields(url=''){
   return `<section class="recognition-entry"><div class="field"><label for="f-url">投递链接 <small>选填</small></label><div class="recognition-url"><input id="f-url" name="url" type="url" value="${escape(url)}" placeholder="粘贴岗位网址，试试自动识别" maxlength="2000"><button class="button soft" type="button" data-action="recognize-url">识别网址</button></div></div><details class="recognition-fallback"><summary>需要登录的页面？粘贴文字识别</summary><label class="field" for="recognitionText">复制岗位详情或投递通知<textarea id="recognitionText" name="recognition_text" maxlength="100000" placeholder="公司：…&#10;岗位：…&#10;当前进度：…&#10;笔试时间：2026-09-18 14:30"></textarea></label><button class="button small" type="button" data-action="recognize-text">识别文字</button></details><div id="recognitionResult" class="recognition-result" aria-live="polite" hidden></div></section>`;
 }
@@ -233,7 +246,7 @@ function applyRecognition(){
     if(control){control.value=recognitionPreview.fields[key];const section=control.closest('details');if(section)section.open=true;filled++;}
   });
   if(!filled){notify('先勾选需要填入的信息');return;}
-  enhanceSelects(form);enhanceDates(form);
+  enhanceSelects(form);enhanceDates(form);refreshCompanyHints();refreshRepeatNotice();
   $('#recognitionResult').innerHTML='<p>已填入 '+filled+' 项。核对后点击下方“保存投递”或“保存修改”。</p>';
   recognitionPreview=null;notify('已填入表单，尚未保存');
 }
@@ -241,19 +254,46 @@ function companyTypeField(app){return `<div class="field"><label for="f-company_
 function classificationFilters(){return `<div class="classification-filters"><span>企业性质</span><label for="companyTypeFilter" class="sr-only">按企业性质筛选</label><select id="companyTypeFilter" class="compact-select"><option value="">全部性质</option>${options(['央国企',...COMPANY_TYPES,'未填写'],state.company_type)}</select>${state.company_type?'<button type="button" class="text-button" data-action="clear-classification">清除筛选</button>':''}</div>`;}
 function stageField(status){return `<div class="field"><label for="f-status">当前阶段</label><select id="f-status" name="status">${options(STATUSES,status)}</select></div>`;}
 function notesField(label,value='',name='note'){return `<div class="field full"><label for="f-${name}">${label}<small>选填</small></label><textarea id="f-${name}" name="${name}" maxlength="20000" placeholder="记下通知内容、面试题目，或需要准备的事情…">${escape(value)}</textarea></div>`;}
-function openEditor(mode,id){
+function companyInputField(app){return `<div class="field company-input"><label for="f-company">公司</label><input id="f-company" name="company" value="${escape(app.company)}" placeholder="输入公司名称，自动查找已有公司" maxlength="160" required autocomplete="off" aria-describedby="companyMatchHint"><div id="companySuggestions" class="company-suggestions" aria-label="已有公司建议" hidden></div><small id="companyMatchHint" class="muted"></small></div>`;}
+function refreshCompanyHints(){
+  const form=$('#recordForm');if(!form?.elements.company)return;
+  const query=form.elements.company.value, matches=matchingCompanies(state.apps,query), exact=matches.find(g=>g.key===companyKey(query));
+  const list=$('#companySuggestions');
+  list.innerHTML=matches.map(g=>`<button type="button" data-action="choose-company" data-id="${escape(g.items[0].id)}"><span>${escape(g.company)}</span><small>已有 ${g.items.length} 次投递${g===exact?' · 自动归入':''}</small></button>`).join('');
+  list.hidden=!matches.length||document.activeElement!==form.elements.company;
+  $('#companyMatchHint').textContent=!query.trim()?'':exact?`保存后归入「${exact.company}」`:'新公司将自动建立分组；也可从建议中选择已有公司。';
+  if(exact&&$('#editor').dataset.mode==='new'&&!form.elements.company_type.dataset.touched&&!form.elements.company_type.value){
+    form.elements.company_type.value=exact.items.find(a=>a.company_type)?.company_type||'';
+    enhanceSelects(form);
+  }
+}
+function refreshRepeatNotice(serverMatches){
+  const form=$('#recordForm'),box=$('#repeatNotice');if(!box||$('#editor').dataset.mode!=='new')return;
+  const matches=serverMatches||state.apps.filter(a=>companyKey(a.company)===companyKey(form.elements.company.value)&&companyKey(a.role)===companyKey(form.elements.role.value));
+  box.hidden=!matches.length;
+  box.innerHTML=matches.length?`<strong>这个岗位已有 ${matches.length} 次投递</strong><p>继续原流程可以更新已有投递；新批次或重新投递，请勾选下方选项。</p><div class="repeat-existing">${matches.map(a=>`<button type="button" class="text-button" data-action="update-existing" data-id="${escape(a.id)}">更新已有投递 · ${escape(a.batch||a.applied_on)} · ${escape(a.status)}</button>`).join('')}</div><label class="checkbox-label"><input type="checkbox" name="allow_repeat">仍然新增一次投递，进度单独记录</label>`:'';
+}
+document.addEventListener('input',event=>{
+  if(event.target.form?.id!=='recordForm')return;
+  if(event.target.name==='company'){refreshCompanyHints();refreshRepeatNotice();}
+  if(event.target.name==='role')refreshRepeatNotice();
+});
+document.addEventListener('focusin',event=>{if(event.target.id==='f-company')refreshCompanyHints();});
+document.addEventListener('click',event=>{if(!event.target.closest('.company-input'))$('#companySuggestions')?.setAttribute('hidden','');});
+document.addEventListener('keydown',event=>{const list=$('#companySuggestions');if(event.key==='Escape'&&list&&!list.hidden){list.hidden=true;event.preventDefault();}});
+function openEditor(mode,id,prefill={}){
   if(state.demo&&mode!=='new'){openDetail(id);return;}
   if(mode==='new'&&state.demo){state.demo=false;$('#drawer').close();render();}
-  const app=id?findApp(id):{};if(id&&!app)return;
+  const app=id?findApp(id):prefill;if(id&&!app)return;
   closeDatePicker();
-  const editor=$('#editor');editor.dataset.mode=mode;editor.dataset.id=id||'';editor.dataset.recognizing='false';recognitionPreview=null;
+  const editor=$('#editor');editor.dataset.mode=mode;editor.dataset.saving='false';editor.dataset.id=id||'';editor.dataset.recognizing='false';recognitionPreview=null;
   const title=mode==='new'?'新增投递':mode==='edit'?'编辑岗位信息':'添加进展';
-  const description=mode==='new'?'先记下公司和岗位，其他信息可以慢慢补。':escape(app.company)+' · '+escape(app.role);
+  const description=mode==='new'?'先记下公司和岗位，其他信息可以慢慢补。':escape(app.company)+' · '+escape(attemptLabel(app,apps()));
   let fields;
   if(mode==='event')fields=`<div class="form-grid">${stageField(app.status)}${field('occurred_on','发生日期',dayKey(),'date','',false,true)}${notesField('这次有什么进展？')}${field('next_action','下一步',app.next_action,'text','例如：准备二面、完成测评',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}<p class="field-hint field full">原有待办会保留；完成后可在详情中勾选，也可以在这里修改或清空。</p></div>`;
-  else fields=`${recognitionFields(app.url)}<div class="form-grid">${field('company','公司',app.company,'text','例如：公司名称',false,true)}${field('role','岗位',app.role,'text','例如：算法工程师',false,true)}${stageField(app.status||'已投递')}${field('applied_on','投递日期',app.applied_on||dayKey(),'date','',false,true)}${field('next_action','下一步',app.next_action,'text','例如：完成测评、等待面试通知',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}</div><details class="optional-fields" ${mode==='edit'?'open':''}><summary>更多信息 · 企业性质、城市与备注</summary><div class="form-grid">${companyTypeField(app)}${field('city','城市',app.city,'text','例如：北京 / 上海')}${field('channel','投递渠道',app.channel,'text','例如：官网 / 内推')}${field('resume','使用的简历',app.resume,'text','例如：算法岗 v3')}${notesField('岗位备注',app.note)}</div></details>`;
+  else fields=`${recognitionFields(app.url)}<div class="form-grid">${companyInputField(app)}${field('role','岗位',app.role,'text','例如：算法工程师',false,true)}${field('batch','批次 / 备注标签',app.batch,'text','例如：提前批、正式批、2027 春招',true)}<div id="repeatNotice" class="repeat-notice field full" hidden></div>${stageField(app.status||'已投递')}${field('applied_on','投递日期',app.applied_on||dayKey(),'date','',false,true)}${field('next_action','下一步',app.next_action,'text','例如：完成测评、等待面试通知',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}</div><details class="optional-fields" ${mode==='edit'?'open':''}><summary>更多信息 · 企业性质、城市与备注</summary><div class="form-grid">${companyTypeField(app)}${field('city','城市',app.city,'text','例如：北京 / 上海')}${field('channel','投递渠道',app.channel,'text','例如：官网 / 内推')}${field('resume','使用的简历',app.resume,'text','例如：算法岗 v3')}${notesField('岗位备注',app.note)}</div></details>`;
   editor.innerHTML=`<form id="recordForm"><div class="dialog-heading"><div><h2 id="editorTitle">${title}</h2><p>${description}</p></div><button type="button" class="icon-button" data-action="close-editor" aria-label="关闭编辑">${icon('close')}</button></div><div class="form-content">${fields}<p id="formError" class="form-error" role="alert" hidden></p></div><div class="dialog-footer">${mode!=='event'?`<label class="checkbox-label"><input type="checkbox" name="priority" ${app.priority==='重点关注'?'checked':''}>重点关注</label>`:''}<div class="actions"><button type="button" class="button" data-action="close-editor">取消</button><button class="button primary" type="submit">${mode==='new'?'保存投递':mode==='event'?'保存进展':'保存修改'}</button></div></div></form>`;
-  enhanceSelects(editor);enhanceDates(editor);
+  enhanceSelects(editor);enhanceDates(editor);refreshCompanyHints();refreshRepeatNotice();
   formSnapshot=JSON.stringify([...new FormData($('#recordForm'))]);
   if(!editor.open)editor.showModal();editor.scrollTop=0;
 }
@@ -270,8 +310,10 @@ async function closeEditor(){
 }
 document.addEventListener('submit',async event=>{
   if(event.target.id!=='recordForm')return;event.preventDefault();
+  if($('#editor').dataset.saving==='true')return;
   if($('#editor').dataset.recognizing==='true'){notify('识别完成后再保存');return;}
   const form=event.target,ed=$('#editor'),mode=ed.dataset.mode,id=ed.dataset.id,data=Object.fromEntries(new FormData(form));
+  if(mode==='new')data.allow_repeat=form.elements.allow_repeat?.checked===true;
   if(mode!=='event')data.priority=form.elements.priority.checked?'重点关注':'普通';
   const err=$('#formError');err.hidden=true;
   if(data.due_at&&!data.next_action.trim()&&data.status!=='已结束'){err.textContent='设置时间时，请填写下一步要做什么。';err.hidden=false;form.elements.next_action.focus();return;}
@@ -281,13 +323,31 @@ document.addEventListener('submit',async event=>{
     const result=await request(mode==='new'?'/api/applications':`/api/applications/${encodeURIComponent(id)}${mode==='event'?'/events':''}`,mode==='edit'?'PATCH':'POST',data);
     acceptApp(result);ed.close();notify(mode==='new'?'投递已记录':mode==='event'?'进展已保存':'信息已更新');
     if(mode==='new')revealCreatedApplication(result.id);
-  }catch(error){err.textContent=error.message;err.hidden=false;err.scrollIntoView({block:'nearest'});}
+  }catch(error){if(error.duplicates)refreshRepeatNotice(error.duplicates);err.textContent=error.message;err.hidden=false;err.scrollIntoView({block:'nearest'});}
   finally{button.disabled=false;button.textContent=original;ed.dataset.saving='false';}
 });
 document.addEventListener('click',async event=>{
   const nav=event.target.closest('[data-nav]');if(nav){navigate(nav.dataset.nav);return;}
   const button=event.target.closest('[data-action]');if(!button||button.disabled)return;
   const {action,id}=button.dataset;
+  if(action==='application-view'){state.applicationView=button.dataset.view;render();return;}
+  if(action==='toggle-company'){
+    const key=button.dataset.key;if(button.getAttribute('aria-expanded')==='true'){expandedCompanies.delete(key);collapsedCompanies.add(key);}else{expandedCompanies.add(key);collapsedCompanies.delete(key);}
+    render();[...document.querySelectorAll('[data-action="toggle-company"]')].find(b=>b.dataset.key===key)?.focus({preventScroll:true});return;
+  }
+  if(action==='company-new'){const source=findApp(id);openEditor('new',null,{company:source.company,company_type:source.company_type});return;}
+  if(action==='choose-company'){
+    const source=state.apps.find(a=>a.id===id),form=$('#recordForm');if(!source)return;
+    form.elements.company.value=source.company;
+    if(!form.elements.company_type.dataset.touched)form.elements.company_type.value=source.company_type||'';
+    enhanceSelects(form);refreshCompanyHints();refreshRepeatNotice();$('#companySuggestions').hidden=true;form.elements.role.focus();return;
+  }
+  if(action==='update-existing'){
+    if(!await confirmBox('转到已有投递？','当前新增表单的内容不会保存，接下来为已有投递添加进展。','更新已有投递'))return;
+    if(!findApp(id)){await load();if(!findApp(id)){notify('这条投递已不存在，请刷新后再试',true);return;}}
+    openEditor('event',id);return;
+  }
+
   if(action==='recognize-url'||action==='recognize-text')return recognizeInput(action==='recognize-url'?'url':'text');
   if(action==='apply-recognition')return applyRecognition();
   if(action==='personalize')return openPersonalization();
@@ -342,7 +402,7 @@ document.addEventListener('change',async event=>{
     if(last){const day=Number(calendarDate(year,month,Number(form.elements.day.value)).slice(8));form.elements.day.innerHTML=Array.from({length:Number(last.slice(8))},(_,i)=>`<option value="${i+1}" ${i+1===day?'selected':''}>${i+1} 日</option>`).join('');enhanceSelects(form);}
     return;
   }
-  if(el.closest('#recordForm')&&['status','applied_on'].includes(el.name))el.dataset.touched='true';
+  if(el.closest('#recordForm')&&['status','applied_on','company_type'].includes(el.name))el.dataset.touched='true';
   if(el.id==='companyTypeFilter'){state.company_type=el.value;render();return;}
   if(el.id==='stageFilter'){state.status=el.value;render();return;}
   if(el.id==='sortSelect'){state.sort=el.value;render();return;}
@@ -355,7 +415,7 @@ document.addEventListener('change',async event=>{
     const file=el.files[0];el.value='';if(!file)return;
     try{
       let data;try{data=JSON.parse(await file.text());}catch{throw new Error('文件不是有效的 JSON，请选择完整备份');}
-      if(data?.format!=='autumn-workbench'||data.version!==1||!Array.isArray(data.applications))throw new Error('请选择本工作台导出的 JSON 备份');
+      if(data?.format!=='autumn-workbench'||![1,2].includes(data.version)||!Array.isArray(data.applications))throw new Error('请选择本工作台导出的 JSON 备份');
       if(!await confirmBox('合并这份备份？',`文件：${file.name}\n包含 ${data.applications.length} 份投递。已有记录会跳过，当前数据会先生成快照。`,'合并导入'))return;
       const result=await request('/api/import','POST',data);await load();notify(`已导入 ${result.imported} 份，跳过 ${result.skipped} 份已有记录`);
     }catch(error){notify(error.message,true);}
@@ -405,16 +465,16 @@ window.addEventListener('beforeunload',event=>{if($('#personalizationDialog').op
 function makeDemo(){
   const today=dayKey();
   const fixtures=[
-    ['远山科技','算法工程师','二面','北京','准备二面 · 复盘项目与算法题',today+'T19:00',-9,'重点关注'],
+    ['远山科技','算法工程师','二面','北京','准备二面 · 复盘项目与算法题',today+'T19:00',-9,'重点关注','正式批'],
     ['星野智能','AI 应用工程师','笔试','上海','完成在线编程笔试',shiftDay(today,1)+'T14:00',-5,'重点关注'],
     ['知行数据','数据分析师','一面','杭州','参加业务一面',shiftDay(today,3)+'T10:30',-7,'普通'],
-    ['青禾网络','后端开发工程师','筛选中','深圳','补充作品集链接','',-3,'普通'],
+    ['远山科技','后端开发工程师','筛选中','深圳','补充作品集链接','',-3,'普通'],
     ['见微实验室','机器学习工程师','已投递','北京','','',-20,'重点关注'],
     ['长川软件','研发工程师','Offer','成都','确认录用意向与入职安排',shiftDay(today,5)+'T16:00',-18,'普通'],
-    ['云帆科技','平台开发工程师','已结束','上海','','',-16,'普通'],
+    ['远山科技','算法工程师','已结束','北京','','',-30,'普通','提前批'],
     ['原点机器人','感知算法工程师','待投递','苏州','','',-1,'普通'],
   ];
-  return fixtures.map(([company,role,status,city,next_action,due_at,days,priority],i)=>{const applied_on=shiftDay(today,days),id='demo-'+i;const recentDay=i===4?applied_on:shiftDay(today,-(i%3));return {id,company,role,status,city,company_type:['民企','民企','外企','民企','事业单位','国企','合资企业','民企'][i],industry:['互联网','人工智能','金融','互联网','教育科研','制造业','通信','制造业'][i],next_action,due_at,priority,applied_on,channel:i%2?'内推':'招聘官网',url:i<3?'https://example.com/careers/'+id:'',resume:i%2?'通用技术版 v2':'算法方向 v3',note:i===0?'重点准备：项目中的技术取舍、评估指标和失败案例。\n这是一条虚构的示例记录。':'这是一条虚构的示例记录，仅用于预览。',created_at:applied_on+'T10:00:00',updated_at:recentDay+'T14:00:00',events:[{id:id+'-1',status:'已投递',occurred_on:applied_on,created_at:applied_on+'T10:00:00',note:'通过招聘官网投递，使用对应方向的简历。',kind:'progress'},...(status!=='已投递'&&status!=='待投递'?[{id:id+'-2',status,occurred_on:recentDay,created_at:recentDay+'T14:00:00',note:i===0?'一面聊了项目设计与评估方式，已收到二面邀请。':'收到新的进展通知，已更新当前阶段。',kind:'progress'}]:[])]};});
+  return fixtures.map(([company,role,status,city,next_action,due_at,days,priority,batch=''],i)=>{const applied_on=shiftDay(today,days),id='demo-'+i;const recentDay=i===4?applied_on:shiftDay(today,-(i%3));return {id,company,role,batch,status,city,company_type:['民企','民企','外企','民企','事业单位','国企','民企','民企'][i],industry:['互联网','人工智能','金融','互联网','教育科研','制造业','通信','制造业'][i],next_action,due_at,priority,applied_on,channel:i%2?'内推':'招聘官网',url:i<3?'https://example.com/careers/'+id:'',resume:i%2?'通用技术版 v2':'算法方向 v3',note:i===0?'重点准备：项目中的技术取舍、评估指标和失败案例。\n这是一条虚构的示例记录。':'这是一条虚构的示例记录，仅用于预览。',created_at:applied_on+'T10:00:00',updated_at:recentDay+'T14:00:00',events:[{id:id+'-1',status:'已投递',occurred_on:applied_on,created_at:applied_on+'T10:00:00',note:'通过招聘官网投递，使用对应方向的简历。',kind:'progress'},...(status!=='已投递'&&status!=='待投递'?[{id:id+'-2',status,occurred_on:recentDay,created_at:recentDay+'T14:00:00',note:i===0?'一面聊了项目设计与评估方式，已收到二面邀请。':'收到新的进展通知，已更新当前阶段。',kind:'progress'}]:[])]};});
 }
 await load();
 
@@ -423,8 +483,8 @@ if(document.modelContext?.registerTool){
   const lifecycle=new AbortController();
   const register=tool=>{try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{/* Ordinary browsers keep using the visible interface. */}};
   const requireLive=()=>{if(state.demo)throw new Error('示例预览是只读的，请先返回我的记录。');};
-  register({name:'search_applications',title:'查找秋招投递',description:'读取当前工作台的投递记录，返回匹配公司的岗位、编号、当前阶段和下一步。示例模式返回的记录会明确标记。',inputSchema:{type:'object',properties:{query:{type:'string'}},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute(input={}){if(typeof input.query!=='undefined'&&typeof input.query!=='string')throw new Error('query 必须是文字');return {demo:state.demo,applications:filterApps(apps(),{query:input.query||''}).map(({id,company,role,company_type,industry,status,next_action,due_at})=>({id,company,role,company_type,industry,status,next_action,due_at}))};}});
-  register({name:'create_application',title:'记录新投递',description:'创建并保存一份真实投递，然后在列表中突出显示。需要公司和岗位；同一公司同名岗位不可重复。',inputSchema:{type:'object',properties:{company:{type:'string'},role:{type:'string'},company_type:{type:'string',enum:['',...COMPANY_TYPES]},industry:{type:'string',enum:['',...INDUSTRIES]},status:{type:'string',enum:STATUSES},city:{type:'string'},url:{type:'string',description:'投递官网或岗位页面的完整 http/https 地址'},next_action:{type:'string'},due_at:{type:'string',description:'本地时间，YYYY-MM-DDTHH:MM；有时间时必须填写 next_action'}},required:['company','role'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},async execute(input){requireLive();const result=await request('/api/applications','POST',input);acceptApp(result);revealCreatedApplication(result.id);notify('投递已记录');return {id:result.id,company:result.company,role:result.role,status:result.status};}});
+  register({name:'search_applications',title:'查找秋招投递',description:'读取当前工作台的投递记录，返回匹配公司的岗位、编号、当前阶段和下一步。示例模式返回的记录会明确标记。',inputSchema:{type:'object',properties:{query:{type:'string'}},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute(input={}){if(typeof input.query!=='undefined'&&typeof input.query!=='string')throw new Error('query 必须是文字');return {demo:state.demo,applications:filterApps(apps(),{query:input.query||''}).map(({id,company,role,batch,company_type,industry,status,next_action,due_at})=>({id,company,role,batch,company_type,industry,status,next_action,due_at}))};}});
+  register({name:'create_application',title:'记录新投递',description:'创建并保存一份真实投递，然后在列表中突出显示。需要公司和岗位；同公司自动归组；同名岗位再次投递需明确设置 allow_repeat=true。',inputSchema:{type:'object',properties:{company:{type:'string'},role:{type:'string'},batch:{type:'string',maxLength:80},allow_repeat:{type:'boolean',description:'明确确认同公司同岗位新增一次独立投递'},company_type:{type:'string',enum:['',...COMPANY_TYPES]},industry:{type:'string',enum:['',...INDUSTRIES]},status:{type:'string',enum:STATUSES},city:{type:'string'},url:{type:'string',description:'投递官网或岗位页面的完整 http/https 地址'},next_action:{type:'string'},due_at:{type:'string',description:'本地时间，YYYY-MM-DDTHH:MM；有时间时必须填写 next_action'}},required:['company','role'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},async execute(input){requireLive();const result=await request('/api/applications','POST',input);acceptApp(result);revealCreatedApplication(result.id);notify('投递已记录');return {id:result.id,company:result.company,role:result.role,status:result.status};}});
   register({name:'add_application_progress',title:'保存投递进展',description:'为指定编号的真实投递追加进展并更新当前阶段。省略下一步与时间会保留原待办；传空字符串可清除。',inputSchema:{type:'object',properties:{id:{type:'string'},status:{type:'string',enum:STATUSES},note:{type:'string'},occurred_on:{type:'string',description:'YYYY-MM-DD'},next_action:{type:'string'},due_at:{type:'string'}},required:['id','status'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},async execute(input){requireLive();if(typeof input?.id!=='string'||!input.id)throw new Error('请提供投递编号');const {id,...data}=input;const result=await request(`/api/applications/${encodeURIComponent(id)}/events`,'POST',data);acceptApp(result);notify('进展已保存');return {id:result.id,status:result.status,next_action:result.next_action,due_at:result.due_at};}});
   window.addEventListener('pagehide',event=>{if(!event.persisted)lifecycle.abort();});
 }

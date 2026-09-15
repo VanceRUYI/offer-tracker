@@ -47,7 +47,7 @@ export function taskGroups(apps, now = new Date()) {
 export function filterApps(apps, {query='',status='',priority=false,sort='newest',company_type='',industry=''}={}) {
   const q=query.trim().toLocaleLowerCase();
   const matches=(value,filter)=>!filter || (filter==='未填写' ? !value : value===filter);
-  const list=apps.filter(a=>(!q || [a.company,a.role,a.city,a.note,a.next_action,a.channel,a.resume,a.company_type,a.industry].join(' ').toLocaleLowerCase().includes(q)) && (!status || (status==='进行中' ? !['待投递','已结束','Offer'].includes(a.status) : a.status===status)) && (!priority || a.priority==='重点关注') && (company_type==='央国企' ? ['央企','国企'].includes(a.company_type) : matches(a.company_type,company_type)) && matches(a.industry,industry));
+  const list=apps.filter(a=>(!q || [a.company,a.role,a.batch,a.city,a.note,a.next_action,a.channel,a.resume,a.company_type,a.industry].join(' ').toLocaleLowerCase().includes(q)) && (!status || (status==='进行中' ? !['待投递','已结束','Offer'].includes(a.status) : a.status===status)) && (!priority || a.priority==='重点关注') && (company_type==='央国企' ? ['央企','国企'].includes(a.company_type) : matches(a.company_type,company_type)) && matches(a.industry,industry));
   return list.sort((a,b)=>{
     if(sort==='company') return a.company.localeCompare(b.company,'zh-CN');
     if(sort==='due') return (a.due_at||'9999').localeCompare(b.due_at||'9999');
@@ -68,4 +68,33 @@ export function dateValue(day, hour, minute, withTime) {
   if(!withTime)return day;
   if(!/^\d{1,2}$/.test(String(hour)) || !/^\d{1,2}$/.test(String(minute)) || Number(hour)>23 || Number(minute)>59)return '';
   return `${day}T${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+}
+
+// Grouping affects presentation only; every attempt retains its own identity.
+export const companyKey = value => String(value || '').trim().toLowerCase();
+export function groupCompanies(records) {
+  const groups = new Map();
+  for(const app of records) {
+    const key = companyKey(app.company);
+    if(!groups.has(key))groups.set(key,{key, company:app.company.trim(), items:[], active:0});
+    const group=groups.get(key); group.items.push(app);
+    if(!['待投递','已结束','Offer'].includes(app.status))group.active++;
+  }
+  return [...groups.values()];
+}
+export function matchingCompanies(records, query) {
+  const key=companyKey(query);
+  if(!key)return [];
+  return groupCompanies(records).filter(g=>g.key.includes(key)||key.includes(g.key))
+    .sort((a,b)=>Number(b.key===key)-Number(a.key===key)||a.company.localeCompare(b.company,'zh-CN')).slice(0,6);
+}
+export function attemptLabel(app, records) {
+  const repeats=records.filter(a=>companyKey(a.company)===companyKey(app.company)&&companyKey(a.role)===companyKey(app.role));
+  let detail=app.batch || (repeats.length>1 ? app.applied_on : '');
+  const sameLabel=repeats.filter(a=>(a.batch || a.applied_on)===detail);
+  if(sameLabel.length>1){
+    sameLabel.sort((a,b)=>(a.created_at||'').localeCompare(b.created_at||'')||a.id.localeCompare(b.id));
+    detail += ` · 第 ${sameLabel.findIndex(a=>a.id===app.id)+1} 次`;
+  }
+  return app.role+(detail ? ' · '+detail : '');
 }

@@ -53,6 +53,22 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('DELETE', '/api/applications/' + app['id'])[0], 200)
         self.assertEqual(json.loads(self.request('GET', '/api/applications')[1]), [])
 
+    def test_repeat_requires_confirmation_and_exports_batch(self):
+        data = {'company':'Acme', 'role':'算法', 'batch':'提前批'}
+        first = json.loads(self.request('POST', '/api/applications', data)[1])
+        status, body = self.request('POST', '/api/applications', {**data, 'company':'ACME'})
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body)['duplicates'][0]['id'], first['id'])
+        status, body = self.request('POST', '/api/applications', {**data, 'batch':'正式批', 'allow_repeat':True})
+        self.assertEqual(status, 201)
+        self.assertNotEqual(json.loads(body)['id'], first['id'])
+        exported = json.loads(self.request('GET', '/api/export.json')[1])
+        self.assertEqual(exported['version'], 2)
+        self.assertEqual(len(exported['applications']), 2)
+        rows = list(csv.reader(io.StringIO(self.request('GET', '/api/export.csv')[1].decode('utf-8-sig'))))
+        self.assertEqual(rows[0][2], '批次')
+        self.assertEqual(rows[1][2], '正式批')
+
     def test_personalization_roundtrip_and_validation(self):
         status, body = self.request('GET', '/api/personalization')
         self.assertEqual(status, 200)

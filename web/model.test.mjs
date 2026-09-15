@@ -105,3 +105,27 @@ test('date selection preserves local minutes and rejects invalid dates or times'
     assert.equal(dateValue(...args,true),'');
   }
 });
+
+test('companies group exact names without folding abbreviations and retain filtered order', async () => {
+  const {groupCompanies, companyKey}=await import('./model.mjs');
+  assert.equal(typeof groupCompanies,'function');
+  const rows=[{id:'a',company:' Acme ',role:'算法',status:'一面'}, {id:'b',company:'ACME',role:'后端',status:'已结束'}, {id:'c',company:'Ac',role:'算法',status:'已投递'}];
+  const groups=groupCompanies(rows);
+  assert.equal(groups.length,2);
+  assert.deepEqual(groups[0].items.map(a=>a.id),['a','b']);
+  assert.equal(groups[0].active,1);
+  assert.equal(companyKey(' AcME '),'acme');
+  assert.deepEqual(groupCompanies(filterApps(rows,{status:'一面'}))[0].items.map(a=>a.id),['a']);
+});
+
+test('company suggestions prefer exact match and attempt labels distinguish repeat records', async () => {
+  const {matchingCompanies, attemptLabel}=await import('./model.mjs');
+  assert.equal(typeof matchingCompanies,'function');
+  const rows=[{id:'a',company:'字节跳动',role:'算法',batch:'提前批',applied_on:'2026-08-01'}, {id:'b',company:'字节跳动',role:'算法',batch:'',applied_on:'2026-09-15'}, {id:'c',company:'字节',role:'后端'}];
+  assert.equal(matchingCompanies(rows,'字节')[0].company,'字节');
+  assert.equal(matchingCompanies(rows,'字节').length,2);
+  assert.equal(attemptLabel(rows[0],rows),'算法 · 提前批');
+  assert.equal(attemptLabel(rows[1],rows),'算法 · 2026-09-15');
+  assert.equal(attemptLabel(rows[2],rows),'后端');
+  assert.deepEqual(filterApps(rows,{query:'提前批'}).map(a=>a.id),['a']);
+});

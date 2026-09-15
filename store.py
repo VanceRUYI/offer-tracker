@@ -12,7 +12,7 @@ STATUSES = ['待投递', '已投递', '筛选中', '测评', '笔试', '一面',
 TERMINAL = {'已结束'}
 COMPANY_TYPES = ['央企', '国企', '民企', '外企', '合资企业', '事业单位', '其他']
 INDUSTRIES = ['互联网', '人工智能', '金融', '制造业', '能源', '通信', '医疗健康', '教育科研', '消费零售', '其他']
-FIELDS = ('company', 'role', 'status', 'priority', 'applied_on', 'city', 'channel', 'url', 'resume', 'note', 'next_action', 'due_at', 'company_type', 'industry')
+FIELDS = ('company', 'role', 'status', 'priority', 'applied_on', 'city', 'channel', 'url', 'resume', 'note', 'next_action', 'due_at', 'company_type', 'industry', 'batch')
 
 PERSONALIZATION_DEFAULTS = {
     'tagline': '今天也按自己的节奏来',
@@ -25,6 +25,16 @@ PERSONALIZATION_ICONS = {'leaf': '叶子', 'sun': '太阳', 'star': '星星', 'h
 
 class ValidationError(ValueError):
     pass
+
+
+class DuplicateApplication(ValidationError):
+    def __init__(self, matches):
+        super().__init__('这个公司的同名岗位已有记录，请选择更新已有投递或明确新增一次')
+        self.matches = matches
+
+
+def company_key(value):
+    return value.strip().lower()
 
 
 def now():
@@ -84,6 +94,7 @@ def normalize(data, base=None):
         raise ValidationError('请填写公司和岗位')
     if len(result['company']) > 160 or len(result['role']) > 200:
         raise ValidationError('公司或岗位名称过长')
+    result['batch'] = text(result['batch'], '批次', 80)
     if result['status'] not in STATUSES:
         raise ValidationError('请选择有效阶段')
     if result['priority'] not in ('普通', '重点关注'):
@@ -109,14 +120,14 @@ class Store:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self._migrate_company_groups()
         with self.connect() as con:
             con.executescript('''
                 CREATE TABLE IF NOT EXISTS applications (
                     id TEXT PRIMARY KEY,
                     company TEXT NOT NULL COLLATE NOCASE,
                     role TEXT NOT NULL COLLATE NOCASE,
-                    payload TEXT NOT NULL,
-                    UNIQUE(company, role)
+                    payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS events (
                     id TEXT PRIMARY KEY,
@@ -128,8 +139,33 @@ class Store:
                     key TEXT PRIMARY KEY,
                     payload TEXT NOT NULL
                 );
-                PRAGMA user_version = 1;
+                PRAGMA user_version = 2;
             ''')
+
+    def _migrate_company_groups(self):
+        # SQLite cannot drop a table-level UNIQUE constraint in place. Keep IDs
+        # and row order, with foreign keys disabled only on this migration connection.
+        if not self.path.exists():
+            return
+        with self.connect() as con:
+            row = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='applications'").fetchone()
+        if not row or 'UNIQUE' not in row[0].upper():
+            return
+        self.backup('before-company-groups')
+        con = sqlite3.connect(str(self.path), timeout=10)
+        try:
+            con.execute('PRAGMA foreign_keys=OFF')
+            with con:
+                con.execute('BEGIN IMMEDIATE')
+                con.execute('CREATE TABLE applications_v2(id TEXT PRIMARY KEY, company TEXT NOT NULL COLLATE NOCASE, role TEXT NOT NULL COLLATE NOCASE, payload TEXT NOT NULL)')
+                con.execute('INSERT INTO applications_v2 SELECT id,company,role,payload FROM applications ORDER BY rowid')
+                con.execute('DROP TABLE applications')
+                con.execute('ALTER TABLE applications_v2 RENAME TO applications')
+                if con.execute('PRAGMA foreign_key_check').fetchall():
+                    raise ValidationError('旧数据关联检查失败，原数据库未修改')
+                con.execute('PRAGMA user_version=2')
+        finally:
+            con.close()
 
     @contextmanager
     def connect(self):
@@ -160,6 +196,7 @@ class Store:
         app = json.loads(row[0])
         app.setdefault('company_type', '')
         app.setdefault('industry', '')
+        app.setdefault('batch', '')
         app['events'] = [json.loads(r[0]) for r in con.execute('SELECT payload FROM events WHERE application_id=? ORDER BY rowid', (app_id,))]
         return app
 
@@ -173,12 +210,20 @@ class Store:
 
     def _save(self, con, app):
         payload = {key: value for key, value in app.items() if key != 'events'}
-        try:
-            con.execute('''INSERT INTO applications(id, company, role, payload) VALUES(?,?,?,?)
-                ON CONFLICT(id) DO UPDATE SET company=excluded.company, role=excluded.role, payload=excluded.payload''',
-                (app['id'], app['company'], app['role'], json.dumps(payload, ensure_ascii=False)))
-        except sqlite3.IntegrityError:
-            raise ValidationError('这个公司的同名岗位已经记录过了，可以在原记录上添加进展')
+        # The first stored spelling is the canonical display name for an exact match.
+        for (name,) in con.execute('SELECT company FROM applications ORDER BY rowid'):
+            if company_key(name) == company_key(app['company']):
+                app['company'] = name.strip()
+                payload['company'] = app['company']
+                break
+        con.execute('''INSERT INTO applications(id, company, role, payload) VALUES(?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET company=excluded.company, role=excluded.role, payload=excluded.payload''',
+            (app['id'], app['company'], app['role'], json.dumps(payload, ensure_ascii=False)))
+
+    def _duplicates(self, con, app):
+        return [self._get(con, row[0]) for row in con.execute('SELECT id,company,role FROM applications').fetchall()
+                if row[0] != app.get('id') and company_key(row[1]) == company_key(app['company'])
+                and company_key(row[2]) == company_key(app['role'])]
 
     def _event(self, con, app_id, status, note, occurred_on=None, kind='progress'):
         event = {'id': str(uuid.uuid4()), 'status': status, 'note': note,
@@ -187,8 +232,14 @@ class Store:
 
     def create(self, data):
         app = normalize(data)
+        if type(data.get('allow_repeat', False)) is not bool:
+            raise ValidationError('新增一次投递的确认值必须为布尔值')
         app.update(id=str(uuid.uuid4()), created_at=now(), updated_at=now())
         with self.lock, self.connect() as con:
+            con.execute('BEGIN IMMEDIATE')
+            matches = self._duplicates(con, app)
+            if matches and not data.get('allow_repeat', False):
+                raise DuplicateApplication(matches)
             self._save(con, app)
             self._event(con, app['id'], app['status'], '建立投递记录', app['applied_on'])
             return self._get(con, app['id'])
@@ -251,10 +302,10 @@ class Store:
                 con.execute('DELETE FROM applications WHERE id=?', (app_id,))
 
     def export(self):
-        return {'format': 'autumn-workbench', 'version': 1, 'exported_at': now(), 'applications': self.list(), 'personalization': self.personalization()}
+        return {'format': 'autumn-workbench', 'version': 2, 'exported_at': now(), 'applications': self.list(), 'personalization': self.personalization()}
 
     def import_data(self, data):
-        if not isinstance(data, dict) or data.get('format') != 'autumn-workbench' or data.get('version') != 1:
+        if not isinstance(data, dict) or data.get('format') != 'autumn-workbench' or data.get('version') not in (1, 2):
             raise ValidationError('请选择本工作台导出的 JSON 备份文件')
         preferences = normalize_personalization(data['personalization']) if 'personalization' in data else None
         apps = data.get('applications')
@@ -286,7 +337,7 @@ class Store:
             imported = skipped = 0
             with self.connect() as con:
                 for app in validated:
-                    if con.execute('SELECT 1 FROM applications WHERE id=? OR (company=? AND role=?)', (app['id'], app['company'], app['role'])).fetchone():
+                    if con.execute('SELECT 1 FROM applications WHERE id=?', (app['id'],)).fetchone() or (data['version'] == 1 and self._duplicates(con, app)):
                         skipped += 1
                         continue
                     for event in app['events']:

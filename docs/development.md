@@ -8,6 +8,7 @@
 ├── store.py                  # 数据校验、SQLite 事务、历史记录和备份
 ├── recognition.py            # 公开页面读取与字段识别
 ├── test_server.py            # HTTP、资源加载、来源限制与导出测试
+├── test_company_groups.py    # 公司归组、重投、旧库迁移测试
 ├── test_store.py             # 存储、更新、备份和兼容性测试
 ├── test_recognition.py       # 字段识别与网络访问限制测试
 ├── 启动秋招手帖.command       # macOS 启动入口
@@ -40,7 +41,7 @@ python3 server.py --port 8766 --db /tmp/offer-tracker-test/records.sqlite3
 `--port` 指定端口，`--db` 指定数据库文件，`--open` 自动打开浏览器。开发交互测试建议使用独立数据库。修改 Python 服务后需要重启；修改现有前端文件后刷新即可。
 
 ```sh
-python3 -m unittest test_store test_server test_recognition -v
+python3 -m unittest test_company_groups test_store test_server test_recognition -v
 node --test web/model.test.mjs
 node --input-type=module --check < web/app.js
 node --check web/dates.mjs
@@ -52,11 +53,19 @@ git diff --check
 
 日期控件的回归检查：修改年月后点击左右箭头、跨年翻月、年份面板翻页、选择日期与时分、清空选填时间、Esc 关闭。鼠标点击引发的焦点变化或自动滚动不应误关浮层，键盘 Tab 离开与外部点击仍可关闭。
 
+公司分组的回归检查：普通新增自动归组，公司内新增预填名称，简称建议不自动合并；同岗位提示重复、确认后新增；不同批次分别改状态、安排日程；搜索批次、按阶段筛选、平铺切换、单组折叠与展开、新增后自动展开。
+
 ## 数据兼容
 
 数据库默认路径相对于项目目录，不受终端当前目录影响。新字段使用空值兼容旧记录，编辑时未提交的字段保留原值。`industry` 仍保留在存储、备份和接口中以兼容旧数据，日常界面不再展示。
 
 个性化设置存入独立的 `preferences` 表，通过 `/api/personalization` 读取和更新。文字限制长度，图标使用服务端白名单；前端展示时转义文字。JSON 备份增加可选的 `personalization` 字段，导入前校验，在同一事务中恢复，且不覆盖本机已有设置。
+
+SQLite `user_version=2` 移除了旧版 `UNIQUE(company, role)` 约束。启动时检测旧表，在创建 `before-company-groups` 快照后，以事务重建表并保留 ID、行顺序和事件关联。迁移连接临时关闭外键，提交前运行 `foreign_key_check`；其他连接始终开启外键。
+
+投递增加选填 `batch`（最长 80 字），旧记录读取为空字符串。公司按 `strip().lower()` 精确归组，保存时统一为首次记录的名称。创建同公司同岗位记录返回 HTTP 409 和 `duplicates`；请求明确传入布尔值 `allow_repeat=true` 才会独立创建。状态更新按 ID 执行，不影响其他投递。
+
+JSON version 2 按 ID 去重，version 1 保留旧公司/岗位去重规则；导入仍在单个事务完成，时间线编号冲突会回滚。CSV 新增“批次”列。WebMCP 创建接口支持 `batch` 和 `allow_repeat`，搜索结果包含 `batch`。
 
 备份、导入语义及完整恢复步骤见[README](../README.md#数据存在哪里)。不要把实际数据库、导出文件或招聘通知加入测试样本，使用虚构内容和临时数据库。
 

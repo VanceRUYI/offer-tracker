@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
-from store import Store, ValidationError, PERSONALIZATION_DEFAULTS, PERSONALIZATION_ICONS
+from store import Store, ValidationError, DuplicateApplication, PERSONALIZATION_DEFAULTS, PERSONALIZATION_ICONS
 from recognition import recognize
 
 ROOT = Path(__file__).resolve().parent
@@ -67,9 +67,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/export.csv':
                 output = io.StringIO()
                 writer = csv.writer(output)
-                writer.writerow(['公司', '岗位', '当前阶段', '优先级', '投递日期', '城市', '渠道', '岗位链接', '简历版本', '下一步', '安排时间', '备注', '企业性质', '所属行业'])
+                writer.writerow(['公司', '岗位', '批次', '当前阶段', '优先级', '投递日期', '城市', '渠道', '岗位链接', '简历版本', '下一步', '安排时间', '备注', '企业性质', '所属行业'])
                 for app in store.list():
-                    values = [app[k] for k in ('company','role','status','priority','applied_on','city','channel','url','resume','next_action','due_at','note','company_type','industry')]
+                    values = [app[k] for k in ('company','role','batch','status','priority','applied_on','city','channel','url','resume','next_action','due_at','note','company_type','industry')]
                     writer.writerow(["'" + s if s.lstrip().startswith(('=', '+', '-', '@')) or s.startswith(('\t', '\r', '\n')) else s for s in values])
                 return self.reply(200, ('\ufeff' + output.getvalue()).encode(), 'text/csv; charset=utf-8', 'autumn-applications.csv')
             if path in ASSETS:
@@ -126,6 +126,8 @@ class Handler(BaseHTTPRequestHandler):
     def handle_request(self):
         try:
             self.dispatch()
+        except DuplicateApplication as error:
+            self.reply(409, {'error': str(error), 'duplicates': error.matches})
         except ValidationError as exc:
             self.reply(400, {'error': str(exc)})
         except KeyError as exc:
