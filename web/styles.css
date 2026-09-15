@@ -736,9 +736,6 @@ select[hidden] { display:none!important; }
 .new-record-label { display:inline-block; margin-top:5px; color:var(--accent); font-size:10px; font-weight:500; }
 
 /* Personal notes use the same quiet type and palette as the workbench. */
-.overview-aside { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
-.personalize-entry { display:inline-flex; align-items:center; gap:5px; font-size:11px; white-space:nowrap; }
-.personalize-entry svg { width:13px; height:13px; }
 .personal-note { position:relative; padding-right:33px; }
 .personal-note strong,.personal-note-body,.personal-preview-tagline { overflow-wrap:anywhere; }
 .personal-note-body { white-space:pre-line; }
