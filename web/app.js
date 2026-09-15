@@ -1,5 +1,5 @@
 import {enhanceSelects, closeSelectMenu} from './selects.mjs';
-import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, shiftMonth, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
 
 const $ = (s, root=document) => root.querySelector(s);
 const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -34,7 +34,7 @@ document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.datase
 document.querySelectorAll('[data-nav]').forEach(el=>el.setAttribute('aria-label',el.textContent.trim()));
 const routeNames={overview:'近期安排',applications:'投递记录',backup:'数据备份'};
 const initialRoute=location.hash.slice(1);
-const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',industry:'',sort:'newest',day:'',scope:'week',error:''};
+const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',industry:'',sort:'newest',day:'',scope:'week',calendarView:'month',calendarMonth:dayKey().slice(0,7),error:''};
 let demoApps=[], toastTimer, formSnapshot='', recognitionPreview=null;
 const apps=()=>state.demo?demoApps:state.apps;
 const findApp=id=>apps().find(a=>a.id===id);
@@ -86,6 +86,25 @@ function render(){
   $('#main').innerHTML=state.route==='overview'?overview():state.route==='applications'?applications():backup();
   enhanceSelects($('#main'));
 }
+function monthTitle(month){return `${Number(month.slice(0,4))} 年 ${Number(month.slice(5))} 月`;}
+function selectedCalendarDay(){return state.day || (state.calendarMonth===dayKey().slice(0,7)?dayKey():state.calendarMonth+'-01');}
+function calendarViewHeader(){return `<div class="panel-head calendar-heading"><h2>我的日程</h2><div class="segmented" aria-label="日历视图">${[['month','月历'],['week','近 7 天']].map(([view,label])=>`<button id="calendar-view-${view}" data-action="calendar-view" data-view="${view}" aria-pressed="${state.calendarView===view}" class="${state.calendarView===view?'active':''}">${label}</button>`).join('')}</div></div>`;}
+function monthCalendar(all){
+  const days=calendarDays(all,state.calendarMonth), selected=selectedCalendarDay(), today=dayKey();
+  const total=days.filter(d=>d.inMonth).reduce((n,d)=>n+d.items.length,0);
+  return `<section class="panel calendar-panel" aria-label="月历">${calendarViewHeader()}
+    <div class="calendar-toolbar"><div><h3 id="calendar-month-label" aria-live="polite">${monthTitle(state.calendarMonth)}</h3><p>本月 ${total} 项待办</p></div><div class="calendar-navigation"><button id="calendar-prev" class="icon-button calendar-prev" data-action="calendar-month" data-offset="-1" aria-label="上个月">${icon('chevron')}</button><button id="calendar-today" class="button small" data-action="calendar-today">今天</button><button id="calendar-next" class="icon-button" data-action="calendar-month" data-offset="1" aria-label="下个月">${icon('chevron')}</button></div></div>
+    <div class="calendar-weekdays" aria-hidden="true">${['周一','周二','周三','周四','周五','周六','周日'].map(d=>`<span>${d}</span>`).join('')}</div>
+    <div class="month-grid" role="group" aria-labelledby="calendar-month-label">${days.map(({day,inMonth,items})=>`<div class="calendar-cell ${inMonth?'':'outside-month'} ${day===selected?'is-selected':''}">
+      <button class="calendar-date ${day===today?'is-today':''}" data-action="calendar-day" data-day="${day}" aria-label="${day}，${items.length} 项安排" aria-pressed="${day===selected}" ${day===today?'aria-current="date"':''}><time datetime="${day}">${Number(day.slice(8))}</time>${items.length?`<span class="calendar-day-count">${items.length} 项</span>`:''}</button>
+      <div class="calendar-events">${items.slice(0,2).map(a=>`<button class="calendar-event ${tone(a.status)||'active'}" data-action="detail" data-id="${escape(a.id)}" aria-label="${escape(a.due_at.replace('T',' '))}，${escape(a.company)}，${escape(a.next_action)}" title="${escape(a.due_at.slice(11,16)+' · '+a.company+' · '+a.next_action)}"><span class="calendar-event-meta"><time>${escape(a.due_at.slice(11,16))}</time><span>${escape(a.company)}</span></span><span class="calendar-event-title">${escape(a.next_action)}</span></button>`).join('')}</div>
+      ${items.length>2?`<button class="calendar-more desktop-more" data-action="calendar-day" data-day="${day}" aria-label="查看 ${day} 全部 ${items.length} 项安排">另 ${items.length-2} 项</button>`:''}${items.length>1?`<button class="calendar-more mobile-more" data-action="calendar-day" data-day="${day}" aria-label="查看 ${day} 全部 ${items.length} 项安排">另 ${items.length-1} 项</button>`:''}</div>`).join('')}</div>
+    <div class="calendar-footnote"><span>点日期看当天清单，点安排查看投递</span><span>未定时间的待办在下方列出</span></div></section>`;
+}
+function selectCalendarDay(day, reveal=false){
+  state.day=day;state.calendarMonth=day.slice(0,7);render();
+  document.querySelector(`.calendar-date[data-day="${day}"]`)?.focus({preventScroll:!reveal});
+}
 function overview(){
   const all=apps(),groups=taskGroups(all),today=dayKey();
   const count=all.filter(a=>!['待投递','已结束','Offer'].includes(a.status)).length;
@@ -93,15 +112,16 @@ function overview(){
   const stats=[['全部投递',all.length,'briefcase','all'],['进行中',count,'clock','active'],['面试阶段',interviews,'chat','interviews'],['已获 Offer',all.filter(a=>a.status==='Offer').length,'trophy','offer']];
   const dateText=new Date().toLocaleDateString('zh-CN',{month:'long',day:'numeric',weekday:'long'});
   const week=Array.from({length:7},(_,i)=>{const key=shiftDay(today,i),d=new Date(key+'T12:00:00');const n=all.filter(a=>a.next_action&&a.status!=='已结束'&&a.due_at?.slice(0,10)===key).length;return `<button class="day-cell ${i===0?'today':''} ${state.day===key?'selected':''} ${n?'has-events':''}" data-action="day" data-day="${key}" aria-pressed="${state.day===key}" aria-label="${key}，${n} 项安排"><span class="day-name">${i===0?'今天':['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]}</span><span class="day-number">${d.getDate()}</span><span class="day-dot"></span></button>`;}).join('');
+  const scheduleDay=state.calendarView==='month'?selectedCalendarDay():state.day;
   let schedule='';
-  if(state.day){const items=all.filter(a=>a.next_action&&a.status!=='已结束'&&a.due_at?.slice(0,10)===state.day).sort((a,b)=>a.due_at.localeCompare(b.due_at));schedule=items.length?taskSection(prettyDate(state.day),items):empty('这一天还没有安排','你可以在岗位详情中设置下一步和时间。','','calendar');}
+  if(scheduleDay){const items=all.filter(a=>a.next_action&&a.status!=='已结束'&&a.due_at?.slice(0,10)===scheduleDay).sort((a,b)=>a.due_at.localeCompare(b.due_at));schedule=items.length?taskSection('当天待办',items):empty('这一天还没有安排','在投递详情中设置下一步和时间，就会出现在日历里。','','calendar');}
   else{schedule=taskSection('已逾期',groups.overdue,'overdue')+taskSection('今天',groups.today)+taskSection('未来几天',groups.week)+(state.scope==='all'?taskSection('更晚的安排',groups.later):'')+taskSection('时间待定',groups.unscheduled);}
   if(!schedule)schedule=all.length?empty('近期安排已清空','有新的笔试、面试或待办时，在岗位里添加进展就好。','<button class="button" data-nav="applications">查看投递记录</button>','calendar'):empty('从第一份投递开始','记下公司和岗位，后续的通知、面试和复盘都能接着记录。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-action="demo">看看示例</button>');
   const recent=all.flatMap(a=>(a.events||[]).map(e=>({...e,app:a}))).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,5);
   const waiting=waitingApps(all);
   return heading('近期安排',dateText+' · '+(groups.overdue.length?`${groups.overdue.length} 项安排需要处理`:groups.today.length?`今天有 ${groups.today.length} 项安排`:'今天也按自己的节奏来'),`<div class="date-label">${today.replaceAll('-',' / ')}</div>`)+
     `<section class="stats" aria-label="投递概览">${stats.map(([name,n,symbol,filter])=>`<button class="stat" data-action="stat" data-filter="${filter}"><span class="stat-label">${name}</span><span class="stat-number">${n}<em>份</em></span>${icon(symbol)}</button>`).join('')}</section>
-    <div class="overview-grid"><section class="panel"><div class="panel-head"><h2>我的日程</h2><small>${new Date().getFullYear()} 年 ${new Date().getMonth()+1} 月</small></div><div class="week-strip">${week}</div><div class="schedule-toolbar"><span>${state.day?prettyDate(state.day):'待办安排'}${state.day?'<button class="text-button" data-action="clear-day">显示全部</button>':''}</span><div class="segmented" aria-label="安排范围"><button data-action="scope" data-scope="week" class="${state.scope==='week'?'active':''}">未来七天</button><button data-action="scope" data-scope="all" class="${state.scope==='all'?'active':''}">全部安排</button></div></div>${schedule}</section>
+    ${state.calendarView==='month'?monthCalendar(all):''}<div class="overview-grid"><section id="scheduleAgenda" tabindex="-1" class="panel ${state.calendarView==='month'?'calendar-agenda':''}" aria-label="待办清单">${state.calendarView==='month'?`<div class="panel-head"><h2>${new Date(scheduleDay+'T12:00:00').toLocaleDateString('zh-CN',{month:'long',day:'numeric',weekday:'long'})}</h2><small>${scheduleDay.slice(0,4)}</small></div>`:`${calendarViewHeader()}<div class="week-strip">${week}</div><div class="schedule-toolbar"><span>${state.day?prettyDate(state.day):'待办安排'}${state.day?'<button class="text-button" data-action="clear-day">显示全部</button>':''}</span><div class="segmented" aria-label="安排范围"><button data-action="scope" data-scope="week" class="${state.scope==='week'?'active':''}">未来七天</button><button data-action="scope" data-scope="all" class="${state.scope==='all'?'active':''}">全部安排</button></div></div>`}${schedule}${state.calendarView==='month'?taskSection('时间待定',groups.unscheduled):''}</section>
     <aside class="right-stack"><section class="panel"><div class="panel-head"><h2>最近进展</h2>${icon('clock')}</div>${recent.length?`<div class="recent-list">${recent.map(e=>`<div class="recent-entry"><button data-action="detail" data-id="${escape(e.app.id)}">${escape(e.app.company)} · ${escape(e.app.role)}</button><p>${e.kind==='task'?'完成待办':escape(e.status)}</p><time>${prettyDate(e.occurred_on)}</time></div>`).join('')}</div>`:'<p class="mini-empty">添加进展后，这里会留下每一步的记录。</p>'}</section>
     <section class="panel"><div class="panel-head"><h2>等一份回音</h2><small>14 天未更新</small></div>${waiting.length?`<div class="follow-list">${waiting.slice(0,5).map(a=>`<div class="follow-row"><button data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}<small>${escape(a.role)}</small></button><span class="follow-days">${Math.floor((Date.now()-new Date(a.updated_at))/86400000)} 天</span></div>`).join('')}</div>`:'<p class="mini-empty">暂时没有长时间未更新的投递。<br>收到回复，再记一笔。</p>'}</section><div class="note-block"><strong>${icon('leaf')}留一点空间给自己</strong>安排记在这里，精力留给准备。<br>完成一件，就轻轻划掉一件。</div></aside></div>`;
 }
@@ -254,6 +274,10 @@ document.addEventListener('click',async event=>{
   if(action==='confirm-yes'||action==='confirm-no')return $('#confirmDialog').close(action==='confirm-yes'?'yes':'no');
   if(action==='refresh'){await load();if(!state.error)notify('记录已刷新');return;}
   if(action==='demo'){state.demo=!state.demo;if(state.demo)demoApps=makeDemo();$('#drawer').close();state.day='';render();return;}
+  if(action==='calendar-view'){state.calendarView=button.dataset.view;state.day='';render();document.getElementById(button.id)?.focus({preventScroll:true});return;}
+  if(action==='calendar-month'){state.calendarMonth=shiftMonth(state.calendarMonth,Number(button.dataset.offset));state.day=state.calendarMonth+'-01';render();document.getElementById(button.id)?.focus({preventScroll:true});return;}
+  if(action==='calendar-today'){state.calendarMonth=dayKey().slice(0,7);state.day=dayKey();render();$('#calendar-today')?.focus({preventScroll:true});return;}
+  if(action==='calendar-day'){selectCalendarDay(button.dataset.day);if(button.classList.contains('calendar-more'))$('#scheduleAgenda').focus();return;}
   if(action==='day'){state.day=state.day===button.dataset.day?'':button.dataset.day;render();return;}
   if(action==='clear-day'){state.day='';render();return;}
   if(action==='scope'){state.scope=button.dataset.scope;state.day='';render();return;}
@@ -330,3 +354,13 @@ if(document.modelContext?.registerTool){
   register({name:'add_application_progress',title:'保存投递进展',description:'为指定编号的真实投递追加进展并更新当前阶段。省略下一步与时间会保留原待办；传空字符串可清除。',inputSchema:{type:'object',properties:{id:{type:'string'},status:{type:'string',enum:STATUSES},note:{type:'string'},occurred_on:{type:'string',description:'YYYY-MM-DD'},next_action:{type:'string'},due_at:{type:'string'}},required:['id','status'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},async execute(input){requireLive();if(typeof input?.id!=='string'||!input.id)throw new Error('请提供投递编号');const {id,...data}=input;const result=await request(`/api/applications/${encodeURIComponent(id)}/events`,'POST',data);acceptApp(result);notify('进展已保存');return {id:result.id,status:result.status,next_action:result.next_action,due_at:result.due_at};}});
   window.addEventListener('pagehide',event=>{if(!event.persisted)lifecycle.abort();});
 }
+
+// Date navigation stays local to the month calendar and retains keyboard focus after render.
+document.addEventListener('keydown',event=>{
+  const button=event.target.closest?.('.calendar-date');
+  if(!button || event.altKey || event.ctrlKey || event.metaKey)return;
+  const offsets={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7};
+  if(!(event.key in offsets))return;
+  event.preventDefault();event.stopPropagation();
+  selectCalendarDay(shiftDay(button.dataset.day,offsets[event.key]),true);
+});

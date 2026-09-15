@@ -1,6 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dayKey, shiftDay, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {dayKey, shiftDay, shiftMonth, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
+
+test('month navigation handles year boundaries independently of the current day', () => {
+  assert.equal(shiftMonth('2026-12',1),'2027-01');
+  assert.equal(shiftMonth('2027-01',-1),'2026-12');
+  assert.equal(shiftMonth('2024-01',1),'2024-02');
+});
+
+test('month grid starts on Monday and includes leap days and adjacent months', () => {
+  const leap=calendarDays([], '2024-02');
+  assert.equal(leap[0].day,'2024-01-29');
+  assert.equal(leap.length,35);
+  assert.equal(leap.find(d=>d.day==='2024-02-29').inMonth,true);
+  assert.equal(leap.at(-1).day,'2024-03-03');
+  const sixWeeks=calendarDays([], '2026-03');
+  assert.equal(sixWeeks.length,42);
+  assert.equal(sixWeeks[0].day,'2026-02-23');
+  assert.equal(sixWeeks.at(-1).day,'2026-04-05');
+  assert.equal(calendarDays([], '2025-02').some(d=>d.day==='2025-02-29'),false);
+});
+
+test('calendar shows dated pending tasks in time order, including past and distant dates', () => {
+  const apps=[
+    {id:'late',next_action:'面试',due_at:'2026-09-30T16:00'},
+    {id:'early',next_action:'笔试',due_at:'2026-09-30T09:00'},
+    {id:'past',next_action:'补材料',due_at:'2026-09-01T09:00'},
+    {id:'adjacent',next_action:'面试',due_at:'2026-10-01T09:00'},
+    {id:'closed',status:'已结束',next_action:'旧安排',due_at:'2026-09-30T08:00'},
+    {id:'done',next_action:'',due_at:'2026-09-30T08:00'},
+    {id:'unscheduled',next_action:'准备简历',due_at:''},
+  ];
+  const snapshot=JSON.stringify(apps), days=calendarDays(apps,'2026-09');
+  assert.deepEqual(days.find(d=>d.day==='2026-09-30').items.map(a=>a.id),['early','late']);
+  assert.deepEqual(days.find(d=>d.day==='2026-09-01').items.map(a=>a.id),['past']);
+  assert.equal(days.find(d=>d.day==='2026-10-01').inMonth,false);
+  assert.deepEqual(days.flatMap(d=>d.items).map(a=>a.id).sort(),['adjacent','early','late','past']);
+  assert.equal(JSON.stringify(apps),snapshot);
+});
 
 test('company classification filters combine and include old unclassified records', () => {
   const apps=[{id:'a',company_type:'央企',industry:'制造业',status:'二面'}, {id:'b',company_type:'国企',industry:'金融'}, {id:'c',company_type:'民企',industry:'互联网'}, {id:'old'}];

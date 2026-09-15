@@ -8,6 +8,25 @@ export function dayKey(date = new Date()) {
 export function shiftDay(day, amount) {
   const d = new Date(day+'T12:00:00'); d.setDate(d.getDate()+amount); return dayKey(d);
 }
+export function shiftMonth(month, amount) {
+  const d = new Date(month+'-01T12:00:00');
+  d.setMonth(d.getMonth()+amount);
+  return dayKey(d).slice(0,7);
+}
+export function calendarDays(apps, month) {
+  const first=month+'-01', date=new Date(first+'T12:00:00');
+  const offset=(date.getDay()+6)%7;
+  const last=shiftDay(shiftMonth(month,1)+'-01',-1);
+  const count=Math.max(35,Math.ceil((offset+Number(last.slice(8)))/7)*7);
+  const byDay=new Map();
+  apps.filter(a=>a.next_action && a.due_at && a.status!=='已结束')
+    .sort((a,b)=>a.due_at.localeCompare(b.due_at))
+    .forEach(a=>{const key=a.due_at.slice(0,10);if(!byDay.has(key))byDay.set(key,[]);byDay.get(key).push(a);});
+  return Array.from({length:count},(_,i)=>{
+    const day=shiftDay(first,i-offset);
+    return {day,inMonth:day.slice(0,7)===month,items:byDay.get(day)||[]};
+  });
+}
 export function taskGroups(apps, now = new Date()) {
   const today=dayKey(now), end=shiftDay(today,6);
   const groups={overdue:[],today:[],week:[],later:[],unscheduled:[]};
