@@ -552,9 +552,9 @@ select[hidden] { display:none!important; }
 .choice-trigger:disabled { cursor:default; }
 .compact-select.choice-trigger { min-height:34px; border:1px solid #e5e5e5; background:#fff; padding:7px 11px; font-size:12px; border-radius:7px; color:#4c4c4c; }
 .classification-filters .compact-select.choice-trigger { background:white; border-color:#e5e5e5; }
-.choice-trigger.status-select { padding-right:10px; }
+.choice-trigger.status-select { width:84px; min-height:28px; gap:8px; padding-right:10px; }
 .field .choice-control { display:flex; width:100%; }
-.field .choice-trigger { width:100%; border:1px solid #dfdfdf; border-radius:8px; background:#fff; padding:12px; min-height:45px; font-size:13px; line-height:1.5; }
+.field .choice-trigger { width:100%; border:1px solid #dfdfdf; border-radius:10px; background:#fff; padding:12px; min-height:46px; font-size:13px; line-height:1.5; }
 .field .choice-trigger:focus-visible { outline:2px solid #55555570; outline-offset:2px; }
 .choice-menu { position:fixed; inset:auto; margin:0; padding:5px; overflow:auto; overscroll-behavior:contain; background:#fff; color:#292929; border:1px solid #e0e0e0; border-radius:10px; box-shadow:0 12px 32px #00000015,0 2px 5px #00000008; z-index:100; scrollbar-width:thin; }
 .choice-menu::backdrop { background:transparent; backdrop-filter:none; }
@@ -563,6 +563,12 @@ select[hidden] { display:none!important; }
 .choice-option.is-active { background:var(--accent-soft); color:#45513a; }
 .choice-option[aria-disabled=true] { opacity:.4; cursor:default; }
 .choice-tick { color:var(--accent); width:15px; flex:0 0 15px; font-size:12px; font-weight:600; }
+/* Align related controls without changing the page's type scale or spacing. */
+.top-actions>.button,.global-search { min-height:42px; }
+.filter-tools .star-filter,.compact-select.choice-trigger { height:36px; min-height:36px; border-radius:8px; line-height:1.5; }
+.field input { height:46px; min-height:46px; }
+.field input[type=datetime-local],.field input[type=date] { min-height:46px; }
+@media(min-width:701px) { .classification-filters .choice-trigger { min-width:112px; } }
 @media(max-width:1250px) { .workspace { margin-left:194px; } }
 @media(max-width:1150px) { .table-scroll tbody tr { border-radius:14px; box-shadow:none; } .table-scroll tbody tr:hover { box-shadow:none; border-color:#d6d6d6; } }
 @media(max-width:700px) {
