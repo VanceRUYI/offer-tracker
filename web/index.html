@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#176653">
+  <meta name="theme-color" content="#f5f5f7">
   <meta name="description" content="我的秋招工作台：投递、安排与面试进展。">
   <title>秋招手帖 · 我的工作台</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -19,16 +19,16 @@
       <button data-nav="overview"><span data-icon="calendar"></span><span>近期安排</span><span id="navTasks" class="nav-count"></span></button>
       <button data-nav="applications"><span data-icon="table"></span><span>投递记录</span><span id="navApps" class="nav-count"></span></button>
       <button data-nav="backup"><span data-icon="archive"></span><span>数据备份</span></button>
+      <button class="demo-button" id="demoButton" data-action="demo"><span data-icon="eye"></span><span>看看示例</span></button>
     </nav>
     <div class="sidebar-note"><span data-icon="leaf"></span><p>每一步，都有记录。</p><span>按自己的节奏，向前一点。</span></div>
     <div class="sidebar-bottom">
-      <button class="demo-button" id="demoButton" data-action="demo"><span data-icon="eye"></span><span>看看示例</span></button>
       <div class="local-indicator"><span data-icon="harddrive"></span><span>本机保存</span><span class="version">v1.0</span></div>
     </div>
   </aside>
   <div class="workspace">
     <header class="topbar">
-      <div class="breadcrumb">我的空间<span>/</span><strong id="crumb">近期安排</strong></div>
+      <div class="breadcrumb"><span class="workspace-dot" aria-hidden="true"></span><strong id="crumb">近期安排</strong></div>
       <div class="top-actions"><label class="global-search"><span data-icon="search"></span><input id="globalSearch" type="search" placeholder="搜索公司、岗位、备注" aria-label="搜索投递记录"><kbd>/</kbd></label><button class="button primary" data-action="new"><span data-icon="plus"></span><span>新增投递</span></button></div>
     </header>
     <div id="demoBanner" class="demo-banner" hidden><span><strong>示例预览</strong> · 以下为虚构记录，不会保存到你的投递中。</span><button data-action="demo">返回我的记录 <span aria-hidden="true">↗</span></button></div>
