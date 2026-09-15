@@ -116,7 +116,7 @@ export function enhanceDates(root = document) {
       });
       (input.closest('dialog')||document.body).append(panel);
       if(typeof panel.showPopover==='function')panel.showPopover();else panel.removeAttribute('popover');
-      opened={panel,button,close};button.setAttribute('aria-expanded','true');button.setAttribute('aria-controls',panel.id);
+      opened={panel,button,close,position,keyboardNavigation:false};button.setAttribute('aria-expanded','true');button.setAttribute('aria-controls',panel.id);
       draw();panel.querySelector('.date-picker-day[tabindex="0"]')?.focus({preventScroll:true});
     };
     button.addEventListener('click',()=>opened?.button===button?closeDatePicker():open());
@@ -127,13 +127,20 @@ export function enhanceDates(root = document) {
 }
 
 document.addEventListener('pointerdown',event=>{
-  if(opened&&!opened.panel.contains(event.target)&&!opened.button.contains(event.target))closeDatePicker();
+  if(!opened)return;
+  opened.keyboardNavigation=false;
+  if(!opened.panel.contains(event.target)&&!opened.button.contains(event.target))closeDatePicker();
+},true);
+// Some browsers move focus outside a popover when a mouse clicks a non-focusable
+// button. Only keyboard Tab navigation should dismiss on a focus change.
+document.addEventListener('keydown',event=>{
+  if(opened&&event.key==='Tab')opened.keyboardNavigation=true;
 },true);
 document.addEventListener('focusin',event=>{
-  if(opened&&!opened.panel.contains(event.target)&&!opened.button.contains(event.target))closeDatePicker();
+  if(opened?.keyboardNavigation&&!opened.panel.contains(event.target)&&!opened.button.contains(event.target))closeDatePicker();
 });
 document.addEventListener('scroll',event=>{
-  if(opened&&!opened.panel.contains(event.target))closeDatePicker();
+  if(opened&&!opened.panel.contains(event.target))opened.position();
 },true);
 document.addEventListener('close',()=>closeDatePicker(),true);
 window.addEventListener('resize',()=>closeDatePicker());
