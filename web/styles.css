@@ -731,3 +731,6 @@ select[hidden] { display:none!important; }
 .date-picker-years button:hover { background:var(--accent-soft); }
 .date-picker-years button.is-selected { background:var(--accent); color:white; }
 .date-picker [hidden] { display:none!important; }
+
+.table-scroll tbody tr.is-new-record { background:var(--accent-soft); }
+.new-record-label { display:inline-block; margin-top:5px; color:var(--accent); font-size:10px; font-weight:500; }
