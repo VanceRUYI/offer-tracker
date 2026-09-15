@@ -1,0 +1,326 @@
+import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, taskGroups, filterApps, waitingApps} from './model.mjs';
+
+const $ = (s, root=document) => root.querySelector(s);
+const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const paths={
+  calendar:'M8 3v4m8-4v4M4 10h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Zm3 9h2m4 0h2m-8 3h2',
+  table:'M4 4h16v16H4ZM4 9h16M9 9v11M4 14h16',
+  archive:'M4 8h16v12H4ZM3 4h18v4H3Zm6 8h6',
+  search:'m16 16 5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
+  plus:'M12 5v14M5 12h14',
+  arrow:'M5 12h14m-5-5 5 5-5 5',
+  chevron:'m9 5 7 7-7 7',
+  close:'m6 6 12 12M6 18 18 6',
+  check:'m5 12 4 4L19 6',
+  clock:'M12 8v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  leaf:'M19 3C9 3 3 7 5 14c2 7 14 7 14-11ZM5 21c1-7 5-10 9-13',
+  harddrive:'M5 4h14l3 11H2L5 4Zm-3 11v5h20v-5M6 18h.01M10 18h.01',
+  eye:'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm13 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
+  star:'m12 3 2.8 5.8 6.4.9-4.6 4.5 1.1 6.3-5.7-3-5.7 3 1.1-6.3L3 9.7l6.4-.9L12 3Z',
+  edit:'m14 5 5 5M4 20l5-1L21 7l-5-5L4 14v6Z',
+  download:'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',
+  upload:'M12 16V4m-5 5 5-5 5 5M4 16v5h16v-5',
+  external:'M14 3h7v7m0-7L10 14M10 4H4v16h16v-6',
+  briefcase:'M8 6V3h8v3M3 6h18v15H3ZM3 11c6 5 12 5 18 0M10 12h4v4h-4Z',
+  chat:'M4 4h16v13H9l-5 4V4Zm4 5h8m-8 4h5',
+  trophy:'M8 3h8v7a4 4 0 0 1-8 0V3Zm0 2H3v3a5 5 0 0 0 5 5m8-8h5v3a5 5 0 0 1-5 5m-4 1v6m-5 1h10',
+  refresh:'M20 7a8 8 0 0 0-14-2L3 8m0-5v5h5m-4 9a8 8 0 0 0 14 2l3-3m0 5v-5h-5',
+  shield:'m12 2 8 4v6c0 5-8 10-8 10S4 17 4 12V6l8-4Zm-4 10 3 3 5-6',
+  inbox:'M5 4h14l3 14v3H2v-3L5 4ZM2 15h6l2 3h4l2-3h6',
+};
+const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] || paths.briefcase}"/></svg>`;
+document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));
+document.querySelectorAll('[data-nav]').forEach(el=>el.setAttribute('aria-label',el.textContent.trim()));
+const routeNames={overview:'近期安排',applications:'投递记录',backup:'数据备份'};
+const initialRoute=location.hash.slice(1);
+const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',industry:'',sort:'newest',day:'',scope:'week',error:''};
+let demoApps=[], toastTimer, formSnapshot='', recognitionPreview=null;
+const apps=()=>state.demo?demoApps:state.apps;
+const findApp=id=>apps().find(a=>a.id===id);
+const options=(values,value)=>values.map(s=>`<option value="${escape(s)}" ${s===value?'selected':''}>${escape(s)}</option>`).join('');
+function tone(status){return INTERVIEWS.includes(status)?'interview':['测评','笔试'].includes(status)?'assessment':status==='Offer'?'offer':status==='已结束'?'closed':status==='待确认'?'uncertain':['已投递','筛选中'].includes(status)?'active':'';}
+const companyTags=app=>[app.company_type,app.industry].some(Boolean)?`<div class="company-tags">${app.company_type?`<span class="company-tag nature" title="企业性质">${escape(app.company_type)}</span>`:''}${app.industry?`<span class="company-tag" title="所属行业">${escape(app.industry)}</span>`:''}</div>`:'';
+const badge=status=>`<span class="badge ${tone(status)}">${escape(status)}</span>`;
+function logo(app, large=false){const n=[...app.company].reduce((sum,c)=>sum+c.codePointAt(0),0)%4;return `<span class="company-logo tone${n}${large?' large':''}" aria-hidden="true">${escape(app.company.slice(0,1).toUpperCase())}</span>`;}
+function prettyDate(s, withTime=false){if(!s)return '未定时间'; const day=s.slice(0,10);const base=day===dayKey()?'今天':day===shiftDay(dayKey(),1)?'明天':`${Number(day.slice(5,7))}月${Number(day.slice(8,10))}日`;return base+(withTime&&s.includes('T')?' '+s.slice(11,16):'');}
+const isLate=a=>a.due_at&&new Date(a.due_at)<new Date();
+const timeLabel=a=>a.due_at ? (a.due_at.slice(0,10)===dayKey()?a.due_at.slice(11,16):`${a.due_at.slice(5,10).replace('-','/')} ${a.due_at.slice(11,16)}`):'未定时间';
+function notify(message,error=false){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').classList.toggle('error',error);$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,4500);}
+async function request(path,method='GET',body){
+  let response;
+  try{response=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Workbench':'1'},body:body===undefined?undefined:JSON.stringify(body)});}
+  catch{throw new Error('连接已断开，请重新启动工作台后再试。未保存的输入会保留。');}
+  const data=await response.json().catch(()=>({error:'收到异常响应，请重试'}));
+  if(!response.ok)throw new Error(data.error||'操作未完成，请重试');
+  return data;
+}
+function navigate(route){state.route=route;state.day='';if(location.hash!=='#'+route)history.replaceState(null,'','#'+route);render();}
+async function load(){
+  try{state.apps=await request('/api/applications');state.error='';}
+  catch(error){state.error=error.message;}
+  render();
+}
+function acceptApp(app){const i=state.apps.findIndex(a=>a.id===app.id);if(i<0)state.apps.unshift(app);else state.apps[i]=app;render();if($('#drawer').open&&$('#drawer').dataset.id===app.id)renderDrawer(app);$('#saveStatus').textContent='已保存到本机 · '+new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});}
+async function mutate(path,method,body,message){if(state.demo){notify('示例为只读，返回我的记录后即可操作');return;}
+  try{const result=await request(path,method,body);acceptApp(result);notify(message);return result;}
+  catch(error){notify(error.message,true);render();}
+}
+function heading(title,subtitle,aside=''){return `<div class="page-heading"><div><h1>${title}</h1><p>${subtitle}</p></div>${aside}</div>`;}
+function empty(title,description,buttons='',symbol='inbox'){return `<div class="empty-state"><div class="empty-icon">${icon(symbol)}</div><h3>${title}</h3><p>${description}</p><div class="empty-actions">${buttons}</div></div>`;}
+function render(){
+  const all=apps();
+  $('#seasonLabel').textContent=new Date().getFullYear()+' 秋招季';
+  $('#crumb').textContent=routeNames[state.route];
+  document.title=routeNames[state.route]+' · 秋招手帖';
+  document.querySelectorAll('[data-nav]').forEach(b=>{b.classList.toggle('active',b.dataset.nav===state.route);if(b.dataset.nav===state.route)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
+  $('#navApps').textContent=all.length||'';
+  const pending=all.filter(a=>a.next_action&&a.status!=='已结束').length;
+  $('#navTasks').textContent=pending||'';
+  $('#demoBanner').hidden=!state.demo;
+  $('#demoButton').innerHTML=icon('eye')+`<span>${state.demo?'返回我的记录':'看看示例'}</span>`;
+  $('#demoButton').setAttribute('aria-label',state.demo?'返回我的记录':'看看示例');
+  if(state.error&&!state.demo){$('#main').innerHTML=empty('工作台暂时没有连接上',escape(state.error),'<button class="button primary" data-action="refresh">重新连接</button>','refresh');return;}
+  $('#main').innerHTML=state.route==='overview'?overview():state.route==='applications'?applications():backup();
+}
+function overview(){
+  const all=apps(),groups=taskGroups(all),today=dayKey();
+  const count=all.filter(a=>!['待投递','已结束','Offer'].includes(a.status)).length;
+  const interviews=all.filter(a=>INTERVIEWS.includes(a.status)).length;
+  const stats=[['全部投递',all.length,'briefcase','all'],['进行中',count,'clock','active'],['面试阶段',interviews,'chat','interviews'],['已获 Offer',all.filter(a=>a.status==='Offer').length,'trophy','offer']];
+  const dateText=new Date().toLocaleDateString('zh-CN',{month:'long',day:'numeric',weekday:'long'});
+  const week=Array.from({length:7},(_,i)=>{const key=shiftDay(today,i),d=new Date(key+'T12:00:00');const n=all.filter(a=>a.next_action&&a.status!=='已结束'&&a.due_at?.slice(0,10)===key).length;return `<button class="day-cell ${i===0?'today':''} ${state.day===key?'selected':''} ${n?'has-events':''}" data-action="day" data-day="${key}" aria-pressed="${state.day===key}" aria-label="${key}，${n} 项安排"><span class="day-name">${i===0?'今天':['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]}</span><span class="day-number">${d.getDate()}</span><span class="day-dot"></span></button>`;}).join('');
+  let schedule='';
+  if(state.day){const items=all.filter(a=>a.next_action&&a.status!=='已结束'&&a.due_at?.slice(0,10)===state.day).sort((a,b)=>a.due_at.localeCompare(b.due_at));schedule=items.length?taskSection(prettyDate(state.day),items):empty('这一天还没有安排','你可以在岗位详情中设置下一步和时间。','','calendar');}
+  else{schedule=taskSection('已逾期',groups.overdue,'overdue')+taskSection('今天',groups.today)+taskSection('未来几天',groups.week)+(state.scope==='all'?taskSection('更晚的安排',groups.later):'')+taskSection('时间待定',groups.unscheduled);}
+  if(!schedule)schedule=all.length?empty('近期安排已清空','有新的笔试、面试或待办时，在岗位里添加进展就好。','<button class="button" data-nav="applications">查看投递记录</button>','calendar'):empty('从第一份投递开始','记下公司和岗位，后续的通知、面试和复盘都能接着记录。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-action="demo">看看示例</button>');
+  const recent=all.flatMap(a=>(a.events||[]).map(e=>({...e,app:a}))).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,5);
+  const waiting=waitingApps(all);
+  return heading('把下一步，安排好。',dateText+' · '+(groups.overdue.length?`${groups.overdue.length} 项安排需要处理`:groups.today.length?`今天有 ${groups.today.length} 项安排`:'今天也按自己的节奏来'),`<div class="date-label">${today.replaceAll('-',' / ')}</div>`)+
+    `<section class="stats" aria-label="投递概览">${stats.map(([name,n,symbol,filter])=>`<button class="stat" data-action="stat" data-filter="${filter}"><span class="stat-label">${name}</span><span class="stat-number">${n}<em>份</em></span>${icon(symbol)}</button>`).join('')}</section>
+    <div class="overview-grid"><section class="panel"><div class="panel-head"><h2>我的日程</h2><small>${new Date().getFullYear()} 年 ${new Date().getMonth()+1} 月</small></div><div class="week-strip">${week}</div><div class="schedule-toolbar"><span>${state.day?prettyDate(state.day):'待办安排'}${state.day?'<button class="text-button" data-action="clear-day">显示全部</button>':''}</span><div class="segmented" aria-label="安排范围"><button data-action="scope" data-scope="week" class="${state.scope==='week'?'active':''}">未来七天</button><button data-action="scope" data-scope="all" class="${state.scope==='all'?'active':''}">全部安排</button></div></div>${schedule}</section>
+    <aside class="right-stack"><section class="panel"><div class="panel-head"><h2>最近进展</h2>${icon('clock')}</div>${recent.length?`<div class="recent-list">${recent.map(e=>`<div class="recent-entry"><button data-action="detail" data-id="${escape(e.app.id)}">${escape(e.app.company)} · ${escape(e.app.role)}</button><p>${e.kind==='task'?'完成待办':escape(e.status)}</p><time>${prettyDate(e.occurred_on)}</time></div>`).join('')}</div>`:'<p class="mini-empty">添加进展后，这里会留下每一步的记录。</p>'}</section>
+    <section class="panel"><div class="panel-head"><h2>等一份回音</h2><small>14 天未更新</small></div>${waiting.length?`<div class="follow-list">${waiting.slice(0,5).map(a=>`<div class="follow-row"><button data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}<small>${escape(a.role)}</small></button><span class="follow-days">${Math.floor((Date.now()-new Date(a.updated_at))/86400000)} 天</span></div>`).join('')}</div>`:'<p class="mini-empty">暂时没有长时间未更新的投递。<br>收到回复，再记一笔。</p>'}</section><div class="note-block"><strong>${icon('leaf')}留一点空间给自己</strong>安排记在这里，精力留给准备。<br>完成一件，就轻轻划掉一件。</div></aside></div>`;
+}
+function taskSection(label,list,extra=''){return list.length?`<section class="task-group"><div class="group-label ${extra}">${label}<span class="count">${list.length}</span></div>${list.map(a=>`<div class="task-row"><button class="complete-button" data-action="complete" data-id="${escape(a.id)}" aria-label="完成：${escape(a.next_action)}" ${state.demo?'disabled':''}>${icon('check')}</button><button class="task-info" data-action="detail" data-id="${escape(a.id)}"><strong>${escape(a.next_action)}</strong><small>${escape(a.company)} · ${escape(a.role)}</small></button><div class="task-meta"><time class="task-time ${isLate(a)?'late':''}">${timeLabel(a)}</time>${badge(a.status)}</div><button class="icon-button task-edit" data-action="event" data-id="${escape(a.id)}" aria-label="更新${escape(a.company)}的进展">${icon('chevron')}</button></div>`).join('')}</section>`:'';}
+function applications(){
+  let filtered=filterApps(apps(),{query:state.query,status:state.status==='面试阶段'?'':state.status,priority:state.priority,sort:state.sort,company_type:state.company_type,industry:state.industry});
+  if(state.status==='面试阶段')filtered=filtered.filter(a=>INTERVIEWS.includes(a.status));
+  const tabs=[['','全部'],['进行中','进行中'],['面试阶段','面试'],['Offer','Offer'],['已结束','已结束']];
+  const selectStatus=tabs.some(([key])=>state.status===key)?'':state.status;
+  return heading('每一份投递，都有下文。',`共 ${apps().length} 份记录 · 随时补充进展，保留完整过程。`,`<button class="button" data-action="refresh">${icon('refresh')}刷新</button>`)+
+    (state.query?`<div class="search-summary">搜索“${escape(state.query)}”<button class="text-button" data-action="clear-search">清除搜索</button></div>`:'')+
+    `<section class="panel table-panel"><div class="table-toolbar"><div class="filter-tabs" aria-label="筛选阶段">${tabs.map(([key,name])=>`<button class="filter-tab ${state.status===key?'active':''}" data-action="filter" data-filter="${key}" aria-pressed="${state.status===key}">${name}</button>`).join('')}</div><div class="filter-tools"><button class="star-filter ${state.priority?'active':''}" data-action="priority-filter" aria-pressed="${state.priority}">${icon('star')}重点关注</button><select id="stageFilter" class="compact-select" aria-label="按具体阶段筛选"><option value="">具体阶段</option>${options(STATUSES,selectStatus)}</select><select id="sortSelect" class="compact-select" aria-label="排序方式">${[['newest','最近投递'],['due','安排时间'],['company','公司名称']].map(([value,name])=>`<option value="${value}" ${state.sort===value?'selected':''}>${name}</option>`).join('')}</select></div></div>
+    ${classificationFilters()}${filtered.length?`<div class="table-scroll"><table><thead><tr><th scope="col">公司 / 岗位</th><th scope="col">当前阶段</th><th scope="col">城市</th><th scope="col">投递入口</th><th scope="col">下一步</th><th scope="col">投递日期</th><th scope="col">操作</th></tr></thead><tbody>${filtered.map(a=>`<tr><td class="identity-cell"><div class="company-cell">${logo(a)}<div><button class="company-name" data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}</button><small>${escape(a.role)}</small>${companyTags(a)}</div></div></td><td class="stage-cell"><select class="badge status-select ${tone(a.status)}" data-status-id="${escape(a.id)}" aria-label="${escape(a.company)} ${escape(a.role)}的当前阶段" ${state.demo?'disabled':''}>${options(STATUSES,a.status)}</select></td><td class="cell-muted city-cell" data-label="城市">${escape(a.city)||'未填写'}</td><td class="link-cell" data-label="投递入口">${applicationLink(a)}</td><td class="table-next" data-label="下一步">${a.next_action?`<strong>${escape(a.next_action)}</strong><small class="${isLate(a)?'overdue':''}">${prettyDate(a.due_at,true)}</small>`:`<button class="text-button" data-action="event" data-id="${escape(a.id)}">${state.demo?'查看进展':'+ 添加下一步'}</button>`}</td><td class="cell-muted applied-cell" data-label="投递日期">${escape(a.applied_on).replaceAll('-','/')}</td><td class="actions-cell"><div class="row-actions"><button class="icon-button priority-button ${a.priority==='重点关注'?'starred':''}" data-action="star" data-id="${escape(a.id)}" aria-label="${a.priority==='重点关注'?'取消重点关注':'重点关注'}${escape(a.company)}" aria-pressed="${a.priority==='重点关注'}" ${state.demo?'disabled':''}>${icon('star')}</button><button class="icon-button" data-action="detail" data-id="${escape(a.id)}" aria-label="查看${escape(a.company)} ${escape(a.role)}">${icon('chevron')}</button></div></td></tr>`).join('')}</tbody></table></div>`:apps().length?empty('没有找到符合条件的投递','试试其他关键词，或者清除筛选条件。','<button class="button" data-action="reset-filters">清除筛选</button>','search'):empty('第一份投递，从这里记起','只需公司和岗位，其他信息可以之后补充。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button>')}
+    <div class="table-footer"><span>显示 ${filtered.length} / ${apps().length} 份投递</span><span>点击公司查看详情 · 修改阶段会自动记入时间线</span></div></section>`;
+}
+function backup(){return heading('你的记录，留在你手里。','导出一份备份，也给这一段努力留个底。')+`<div class="backup-grid"><section class="panel backup-card">${icon('download')}<h2>导出我的记录</h2><p>完整备份包含岗位信息和所有进展；表格适合查看、整理，或分享给别人。</p><button class="button primary" data-action="export-json">${icon('download')}完整备份 JSON</button><button class="button" data-action="export-csv">导出表格 CSV</button><p class="field-hint">当前有 ${state.apps.length} 份真实投递记录。CSV 不包含完整时间线。</p></section><section class="panel backup-card">${icon('upload')}<h2>从备份恢复</h2><p>选择本工作台导出的 JSON 文件。只补充缺少的投递；已有编号或相同公司、岗位的记录会跳过。</p><button class="button" data-action="import">${icon('upload')}选择备份文件</button><p class="field-hint">导入前会自动备份当前数据。</p></section></div><section class="storage-info"><h2>本地保存，随时带走</h2><div class="info-line">${icon('harddrive')}<div><p>记录保存在应用文件夹里的 <code>data/workbench.sqlite3</code>。关闭页面后数据仍然保留。</p></div></div><div class="info-line">${icon('shield')}<div><p>每天首次启动时生成一次快照；导入和删除前也会备份，存放在 <code>data/backups/</code>。</p><p>建议偶尔下载完整备份，另外存一份。更换电脑时，可在新的工作台里导入。</p></div></div><div class="info-line">${icon('clock')}<div><p>当前版本的安排展示在页面内。关闭工作台后，不会发送系统通知。</p></div></div></section>`;}
+function applicationLink(app, detail=false){
+  if(!app.url){
+    if(state.demo)return '<span class="cell-muted">未附链接</span>';
+    return `<button class="${detail?'website-card missing':'application-link missing'}" data-action="link" data-id="${escape(app.id)}">${icon('plus')}<span>补充投递链接${detail?'<small>保存官网或岗位页面，之后直接打开</small>':''}</span></button>`;
+  }
+  let domain='';
+  try{domain=new URL(app.url).hostname.replace(/^www\./,'');}catch{return '';}
+  return `<a class="${detail?'website-card':'application-link'}" href="${escape(app.url)}" target="_blank" rel="noopener noreferrer" title="${escape(app.url)}" aria-label="打开${escape(app.company)}的投递链接（新标签页）">${detail?icon('external'):''}<span>${state.demo?'示例投递页':'打开投递页'}<small>${escape(domain)}</small></span>${icon(detail?'arrow':'external')}</a>`;
+}
+function renderDrawer(app){
+  const d=$('#drawer'),scroll=d.scrollTop;
+  d.dataset.id=app.id;
+  const events=[...(app.events||[])].sort((a,b)=>b.occurred_on.localeCompare(a.occurred_on)||b.created_at.localeCompare(a.created_at));
+  d.innerHTML=`<div class="drawer-top"><span>投递详情${state.demo?' · 示例':''}</span><button class="icon-button" data-action="close-drawer" aria-label="关闭详情">${icon('close')}</button></div><div class="drawer-body"><div class="detail-identity">${logo(app,true)}<div><h2 id="drawerTitle">${escape(app.company)}</h2><p>${escape(app.role)}</p></div></div><div class="detail-badges">${badge(app.status)}${app.priority==='重点关注'?'<span class="badge assessment">'+icon('star')+'重点关注</span>':''}${app.city?'<span class="badge">'+escape(app.city)+'</span>':''}</div><div class="detail-actions">${state.demo?'<button class="button primary" data-action="new">创建我的投递</button>':`<button class="button primary" data-action="event" data-id="${escape(app.id)}">${icon('plus')}添加进展</button><button class="button" data-action="edit" data-id="${escape(app.id)}">${icon('edit')}编辑信息</button>`}</div><div class="detail-website">${applicationLink(app,true)}</div>
+    ${app.next_action?`<section class="next-box"><div class="next-box-head"><span>下一步</span>${icon('calendar')}</div><h3>${escape(app.next_action)}</h3><p>${prettyDate(app.due_at,true)}${isLate(app)?' · 已逾期':''}</p>${state.demo?'':`<button class="button small" data-action="complete" data-id="${escape(app.id)}">${icon('check')}标记完成</button>`}</section>`:''}
+    <dl class="details-grid">${[['企业性质',app.company_type],['所属行业',app.industry],['投递日期',app.applied_on],['投递渠道',app.channel],['简历版本',app.resume],['城市',app.city]].map(([k,v])=>`<div><dt>${k}</dt><dd>${escape(v)||'未填写'}</dd></div>`).join('')}</dl>${app.note?`<section class="detail-section"><h3>岗位备注</h3><p class="detail-note">${escape(app.note)}</p></section>`:''}
+    <section class="detail-section"><h3>进展时间线 <span class="muted">${events.length} 条</span></h3><div class="timeline">${events.map(e=>`<article class="timeline-entry"><header><span>${e.kind==='task'?'完成待办':escape(e.status)}</span><time>${escape(e.occurred_on)}</time></header><p>${escape(e.note)}</p></article>`).join('')}</div></section>${state.demo?'':`<button class="delete-link" data-action="delete" data-id="${escape(app.id)}">删除这份投递</button>`}</div>`;
+  d.scrollTop=scroll;
+}
+function openDetail(id){const app=findApp(id);if(!app)return;renderDrawer(app);if(!$('#drawer').open){$('#drawer').showModal();$('#drawer').scrollTop=0;}}
+function field(name,label,value='',type='text',placeholder='',full=false,required=false){return `<div class="field ${full?'full':''}"><label for="f-${name}">${label}${required?'':'<small>选填</small>'}</label><input id="f-${name}" name="${name}" type="${type}" value="${escape(value)}" placeholder="${escape(placeholder)}" ${required?'required':''} ${['date','datetime-local'].includes(type)?'min="1900-01-01" max="9999-12-31'+(type==='datetime-local'?'T23:59':'')+'"':''} maxlength="${name==='company'?160:name==='role'?200:2000}"></div>`;}
+function recognitionFields(url=''){
+  return `<section class="recognition-entry"><div class="field"><label for="f-url">投递链接 <small>选填</small></label><div class="recognition-url"><input id="f-url" name="url" type="url" value="${escape(url)}" placeholder="粘贴岗位网址，试试自动识别" maxlength="2000"><button class="button soft" type="button" data-action="recognize-url">识别网址</button></div></div><details class="recognition-fallback"><summary>需要登录的页面？粘贴文字识别</summary><label class="field" for="recognitionText">复制岗位详情或投递通知<textarea id="recognitionText" name="recognition_text" maxlength="100000" placeholder="公司：…&#10;岗位：…&#10;当前进度：…&#10;笔试时间：2026-09-18 14:30"></textarea></label><button class="button small" type="button" data-action="recognize-text">识别文字</button></details><div id="recognitionResult" class="recognition-result" aria-live="polite" hidden></div></section>`;
+}
+const recognitionLabels={company_type:'企业性质',industry:'所属行业',company:'公司',role:'岗位',city:'城市',applied_on:'实际投递日期',status:'当前进度',next_action:'下一步',due_at:'安排时间'};
+async function recognizeInput(kind){
+  const form=$('#recordForm'),editor=$('#editor'),resultBox=$('#recognitionResult');
+  if(!form||editor.dataset.recognizing==='true')return;
+  const payload={};
+  if(kind==='url'){
+    const raw=form.elements.url.value.trim();
+    if(!raw){notify('请先粘贴岗位网址');form.elements.url.focus();return;}
+    payload.url=raw.includes('://')?raw:'https://'+raw;
+    form.elements.url.value=payload.url;
+    if(!form.elements.url.checkValidity()){form.elements.url.reportValidity();return;}
+  }else{
+    payload.text=$('#recognitionText').value.trim();
+    if(!payload.text){notify('请先粘贴岗位或通知文字');$('#recognitionText').focus();return;}
+  }
+  editor.dataset.recognizing='true';recognitionPreview=null;
+  resultBox.hidden=false;resultBox.innerHTML='<p>正在识别，请稍候…</p>';
+  const controls=[...form.querySelectorAll('[data-action^="recognize-"],button[type="submit"]')];
+  controls.forEach(b=>b.disabled=true);
+  try{
+    const result=await request('/api/recognize','POST',payload);
+    if($('#recordForm')!==form||!editor.open)return;
+    if(kind==='url'&&form.elements.url.value!==payload.url){resultBox.innerHTML='<p>网址已修改，请重新识别当前网址。</p>';return;}
+    const inferredStatus=!result.fields.status;
+    if(inferredStatus&&editor.dataset.mode==='new'&&Object.keys(result.fields).length){result.fields.status='待确认';result.evidence.status='未识别到个人进度，作为待核对建议';}
+    recognitionPreview=result;
+    const entries=Object.entries(result.fields).filter(([key])=>recognitionLabels[key]);
+    const rows=entries.map(([key,value])=>{
+      const current=form.elements[key]?.value||'';
+      const autoCheck=!current||(editor.dataset.mode==='new'&&['status','applied_on'].includes(key)&&form.elements[key]?.dataset.touched!=='true');
+      return `<label class="recognition-row"><input type="checkbox" data-recognition-key="${key}" ${autoCheck?'checked':''}><span><strong>${recognitionLabels[key]}</strong><span>${escape(value).replace('T',' ')}</span><small>${escape(result.evidence[key]||'请核对')}</small>${current&&current!==value?`<small>当前填写：${escape(current)}</small>`:''}</span></label>`;
+    }).join('');
+    resultBox.innerHTML=`<h3>${entries.length?'识别到 '+entries.length+' 项信息':'这个页面没有可确定的信息'}</h3>${rows}${(result.facts||[]).map(f=>`<p class="recognition-fact">${escape(f.label)}：${escape(f.value)}</p>`).join('')}<p class="recognition-hint">${inferredStatus?'未识别到明确进度，请核对建议。 ':''}${!result.fields.applied_on?'实际投递日期未识别，请核对表单中的日期。 ':''}招聘发布日期不会当作投递日期。</p>${entries.length?'<button class="button small primary" type="button" data-action="apply-recognition">填入勾选信息</button>':'<p class="recognition-hint">可以展开上方“粘贴文字识别”，或直接手动填写。</p>'}`;
+  }catch(error){
+    if($('#recordForm')===form){resultBox.innerHTML=`<p class="recognition-error">${escape(error.message)}</p>`;const fallback=$('.recognition-fallback',form);fallback.open=true;}
+  }finally{
+    if($('#recordForm')===form){editor.dataset.recognizing='false';controls.forEach(b=>b.disabled=false);}
+  }
+}
+function applyRecognition(){
+  if(!recognitionPreview)return;
+  const form=$('#recordForm');let filled=0;
+  document.querySelectorAll('[data-recognition-key]:checked').forEach(check=>{
+    const key=check.dataset.recognitionKey,control=form.elements[key];
+    if(control){control.value=recognitionPreview.fields[key];filled++;}
+  });
+  if(!filled){notify('先勾选需要填入的信息');return;}
+  $('#recognitionResult').innerHTML='<p>已填入 '+filled+' 项。核对后点击下方“保存投递”或“保存修改”。</p>';
+  recognitionPreview=null;notify('已填入表单，尚未保存');
+}
+function classificationFields(app){return `<section class="classification-fields" aria-label="企业分类"><div class="form-grid">${[['company_type','企业性质',COMPANY_TYPES],['industry','所属行业',INDUSTRIES]].map(([key,label,values])=>`<div class="field"><label for="f-${key}">${label}<small>选填</small></label><select id="f-${key}" name="${key}"><option value="">未填写 · 待确认</option>${options(values,app[key])}</select></div>`).join('')}</div><p class="classification-hint">例如“民企 + 互联网”。识别结果可修改，不确定时先留空。</p></section>`;}
+function classificationFilters(){return `<div class="classification-filters"><span>企业分类</span><label for="companyTypeFilter" class="sr-only">按企业性质筛选</label><select id="companyTypeFilter" class="compact-select"><option value="">全部性质</option>${options(['央国企',...COMPANY_TYPES,'未填写'],state.company_type)}</select><label for="industryFilter" class="sr-only">按所属行业筛选</label><select id="industryFilter" class="compact-select"><option value="">全部行业</option>${options([...INDUSTRIES,'未填写'],state.industry)}</select>${state.company_type||state.industry?'<button type="button" class="text-button" data-action="clear-classification">清除分类</button>':''}</div>`;}
+function stageField(status){return `<div class="field"><label for="f-status">当前阶段</label><select id="f-status" name="status">${options(STATUSES,status)}</select></div>`;}
+function notesField(label,value='',name='note'){return `<div class="field full"><label for="f-${name}">${label}<small>选填</small></label><textarea id="f-${name}" name="${name}" maxlength="20000" placeholder="记下通知内容、面试题目，或需要准备的事情…">${escape(value)}</textarea></div>`;}
+function openEditor(mode,id){
+  if(state.demo&&mode!=='new'){openDetail(id);return;}
+  if(mode==='new'&&state.demo){state.demo=false;$('#drawer').close();render();}
+  const app=id?findApp(id):{};if(id&&!app)return;
+  const editor=$('#editor');editor.dataset.mode=mode;editor.dataset.id=id||'';editor.dataset.recognizing='false';recognitionPreview=null;
+  const title=mode==='new'?'新增投递':mode==='edit'?'编辑岗位信息':'添加进展';
+  const description=mode==='new'?'先记下公司和岗位，其他信息可以慢慢补。':escape(app.company)+' · '+escape(app.role);
+  let fields;
+  if(mode==='event')fields=`<div class="form-grid">${stageField(app.status)}${field('occurred_on','发生日期',dayKey(),'date','',false,true)}${notesField('这次有什么进展？')}${field('next_action','下一步',app.next_action,'text','例如：准备二面、完成测评',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}<p class="field-hint field full">原有待办会保留；完成后可在详情中勾选，也可以在这里修改或清空。</p></div>`;
+  else fields=`${recognitionFields(app.url)}<div class="form-grid">${field('company','公司',app.company,'text','例如：公司名称',false,true)}${field('role','岗位',app.role,'text','例如：算法工程师',false,true)}${stageField(app.status||'已投递')}${field('applied_on','投递日期',app.applied_on||dayKey(),'date','',false,true)}${field('next_action','下一步',app.next_action,'text','例如：完成测评、等待面试通知',true)}${field('due_at','安排时间',app.due_at,'datetime-local','',true)}</div>${classificationFields(app)}<details class="optional-fields" ${mode==='edit'?'open':''}><summary>更多信息 · 城市、简历与备注</summary><div class="form-grid">${field('city','城市',app.city,'text','例如：北京 / 上海')}${field('channel','投递渠道',app.channel,'text','例如：官网 / 内推')}${field('resume','使用的简历',app.resume,'text','例如：算法岗 v3',true)}${notesField('岗位备注',app.note)}</div></details>`;
+  editor.innerHTML=`<form id="recordForm"><div class="dialog-heading"><div><h2 id="editorTitle">${title}</h2><p>${description}</p></div><button type="button" class="icon-button" data-action="close-editor" aria-label="关闭编辑">${icon('close')}</button></div><div class="form-content">${fields}<p id="formError" class="form-error" role="alert" hidden></p></div><div class="dialog-footer">${mode!=='event'?`<label class="checkbox-label"><input type="checkbox" name="priority" ${app.priority==='重点关注'?'checked':''}>重点关注</label>`:''}<div class="actions"><button type="button" class="button" data-action="close-editor">取消</button><button class="button primary" type="submit">${mode==='new'?'保存投递':mode==='event'?'保存进展':'保存修改'}</button></div></div></form>`;
+  formSnapshot=JSON.stringify([...new FormData($('#recordForm'))]);
+  if(!editor.open)editor.showModal();editor.scrollTop=0;
+}
+function confirmBox(title,message,label='确认',danger=false){
+  const d=$('#confirmDialog');d.returnValue='';
+  d.innerHTML=`<h2 id="confirmTitle">${escape(title)}</h2><p>${escape(message)}</p><div class="actions"><button class="button" data-action="confirm-no" autofocus>取消</button><button class="button ${danger?'danger':'primary'}" data-action="confirm-yes">${escape(label)}</button></div>`;
+  return new Promise(resolve=>{d.onclose=()=>resolve(d.returnValue==='yes');d.showModal();});
+}
+async function closeEditor(){
+  if($('#editor').dataset.saving==='true')return;
+  const changed=JSON.stringify([...new FormData($('#recordForm'))])!==formSnapshot;
+  if(changed&&!await confirmBox('放弃未保存的内容？','这次输入还没有保存。','放弃修改',true))return;
+  $('#editor').close();
+}
+document.addEventListener('submit',async event=>{
+  if(event.target.id!=='recordForm')return;event.preventDefault();
+  if($('#editor').dataset.recognizing==='true'){notify('识别完成后再保存');return;}
+  const form=event.target,ed=$('#editor'),mode=ed.dataset.mode,id=ed.dataset.id,data=Object.fromEntries(new FormData(form));
+  if(mode!=='event')data.priority=form.elements.priority.checked?'重点关注':'普通';
+  const err=$('#formError');err.hidden=true;
+  if(data.due_at&&!data.next_action.trim()&&data.status!=='已结束'){err.textContent='设置时间时，请填写下一步要做什么。';err.hidden=false;form.elements.next_action.focus();return;}
+  if(data.status==='已结束'){data.next_action='';data.due_at='';}
+  const button=$('button[type=submit]',form),original=button.textContent;button.disabled=true;button.textContent='保存中…';ed.dataset.saving='true';
+  try{
+    const result=await request(mode==='new'?'/api/applications':`/api/applications/${encodeURIComponent(id)}${mode==='event'?'/events':''}`,mode==='edit'?'PATCH':'POST',data);
+    acceptApp(result);ed.close();notify(mode==='new'?'投递已记录':mode==='event'?'进展已保存':'信息已更新');
+    if(mode==='new')openDetail(result.id);
+  }catch(error){err.textContent=error.message;err.hidden=false;err.scrollIntoView({block:'nearest'});}
+  finally{button.disabled=false;button.textContent=original;ed.dataset.saving='false';}
+});
+document.addEventListener('click',async event=>{
+  const nav=event.target.closest('[data-nav]');if(nav){navigate(nav.dataset.nav);return;}
+  const button=event.target.closest('[data-action]');if(!button||button.disabled)return;
+  const {action,id}=button.dataset;
+  if(action==='recognize-url'||action==='recognize-text')return recognizeInput(action==='recognize-url'?'url':'text');
+  if(action==='apply-recognition')return applyRecognition();
+  if(action==='new')return openEditor('new');
+  if(action==='detail')return openDetail(id);
+  if(action==='event'||action==='edit')return openEditor(action,id);
+  if(action==='link'){openEditor('edit',id);if(!state.demo)$('#f-url').focus();return;}
+  if(action==='close-drawer')return $('#drawer').close();
+  if(action==='close-editor')return closeEditor();
+  if(action==='confirm-yes'||action==='confirm-no')return $('#confirmDialog').close(action==='confirm-yes'?'yes':'no');
+  if(action==='refresh'){await load();if(!state.error)notify('记录已刷新');return;}
+  if(action==='demo'){state.demo=!state.demo;if(state.demo)demoApps=makeDemo();$('#drawer').close();state.day='';render();return;}
+  if(action==='day'){state.day=state.day===button.dataset.day?'':button.dataset.day;render();return;}
+  if(action==='clear-day'){state.day='';render();return;}
+  if(action==='scope'){state.scope=button.dataset.scope;state.day='';render();return;}
+  if(action==='filter'){state.status=button.dataset.filter;render();return;}
+  if(action==='priority-filter'){state.priority=!state.priority;render();return;}
+  if(action==='clear-search'){state.query='';$('#globalSearch').value='';render();return;}
+  if(action==='clear-classification'){state.company_type='';state.industry='';render();return;}
+  if(action==='reset-filters'){Object.assign(state,{query:'',status:'',priority:false,company_type:'',industry:''});$('#globalSearch').value='';render();return;}
+  if(action==='stat'){state.query='';$('#globalSearch').value='';state.priority=false;state.company_type='';state.industry='';state.status={all:'',active:'进行中',interviews:'面试阶段',offer:'Offer'}[button.dataset.filter];navigate('applications');return;}
+  if(action==='star'){const a=findApp(id);return mutate(`/api/applications/${encodeURIComponent(id)}`,'PATCH',{priority:a.priority==='重点关注'?'普通':'重点关注'},a.priority==='重点关注'?'已取消重点关注':'已标记为重点关注');}
+  if(action==='complete'){button.disabled=true;await mutate(`/api/applications/${encodeURIComponent(id)}/complete`,'POST',{},'已完成，记下这一步了');button.disabled=false;return;}
+  if(action==='delete'){
+    const app=findApp(id);if(!app||state.demo)return;
+    if(!await confirmBox('删除这份投递？',`${app.company} · ${app.role}\n岗位信息和时间线会一起删除。删除前会自动保存一份本地快照。`,'删除投递',true))return;
+    try{await request(`/api/applications/${encodeURIComponent(id)}`,'DELETE');state.apps=state.apps.filter(a=>a.id!==id);$('#drawer').close();render();notify('投递已删除，删除前已生成本地备份');}catch(error){notify(error.message,true);}return;
+  }
+  if(action==='export-json'||action==='export-csv'){
+    if(state.demo){notify('请先返回我的记录，再导出真实数据');return;}
+    try{const response=await fetch(action==='export-json'?'/api/export.json':'/api/export.csv');if(!response.ok)throw new Error('导出失败，请重试');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`秋招手帖-${dayKey()}.${action==='export-json'?'json':'csv'}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);notify('已生成导出文件');}catch(error){notify(error.message,true);}return;
+  }
+  if(action==='import'){if(state.demo){notify('请先返回我的记录，再导入备份');return;}$('#importFile').click();}
+});
+document.addEventListener('change',async event=>{
+  const el=event.target;
+  if(el.closest('#recordForm')&&['status','applied_on'].includes(el.name))el.dataset.touched='true';
+  if(el.id==='companyTypeFilter'||el.id==='industryFilter'){state[el.id==='companyTypeFilter'?'company_type':'industry']=el.value;render();return;}
+  if(el.id==='stageFilter'){state.status=el.value;render();return;}
+  if(el.id==='sortSelect'){state.sort=el.value;render();return;}
+  if(el.dataset.statusId){
+    const app=findApp(el.dataset.statusId),status=el.value;
+    if(status==='已结束'&&app.next_action&&!await confirmBox('结束这份投递？','结束后，当前待办会一并清除，历史进展仍然保留。','结束投递')){el.value=app.status;return;}
+    el.disabled=true;await mutate(`/api/applications/${encodeURIComponent(app.id)}`,'PATCH',{status},'阶段已更新，并记入时间线');return;
+  }
+  if(el.id==='importFile'){
+    const file=el.files[0];el.value='';if(!file)return;
+    try{
+      let data;try{data=JSON.parse(await file.text());}catch{throw new Error('文件不是有效的 JSON，请选择完整备份');}
+      if(data?.format!=='autumn-workbench'||data.version!==1||!Array.isArray(data.applications))throw new Error('请选择本工作台导出的 JSON 备份');
+      if(!await confirmBox('合并这份备份？',`文件：${file.name}\n包含 ${data.applications.length} 份投递。已有记录会跳过，当前数据会先生成快照。`,'合并导入'))return;
+      const result=await request('/api/import','POST',data);await load();notify(`已导入 ${result.imported} 份，跳过 ${result.skipped} 份已有记录`);
+    }catch(error){notify(error.message,true);}
+  }
+});
+$('#globalSearch').addEventListener('input',event=>{state.query=event.target.value;if(state.route!=='applications')navigate('applications');else render();});
+document.addEventListener('keydown',event=>{if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)&&!document.querySelector('dialog[open]')){event.preventDefault();$('#globalSearch').focus();}});
+$('#editor').addEventListener('cancel',event=>{event.preventDefault();closeEditor();});
+$('#drawer').addEventListener('click',event=>{if(event.target===$('#drawer')){const box=event.target.getBoundingClientRect();if(event.clientX<box.left||event.clientX>box.right)event.target.close();}});
+$('#editor').addEventListener('click',event=>{if(event.target===$('#editor')){const box=event.target.getBoundingClientRect();if(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom)closeEditor();}});
+window.addEventListener('beforeunload',event=>{if($('#editor').open&&JSON.stringify([...new FormData($('#recordForm'))])!==formSnapshot){event.preventDefault();event.returnValue='';}});
+window.addEventListener('hashchange',()=>{const route=location.hash.slice(1);if(routeNames[route])navigate(route);});
+function makeDemo(){
+  const today=dayKey();
+  const fixtures=[
+    ['远山科技','算法工程师','二面','北京','准备二面 · 复盘项目与算法题',today+'T19:00',-9,'重点关注'],
+    ['星野智能','AI 应用工程师','笔试','上海','完成在线编程笔试',shiftDay(today,1)+'T14:00',-5,'重点关注'],
+    ['知行数据','数据分析师','一面','杭州','参加业务一面',shiftDay(today,3)+'T10:30',-7,'普通'],
+    ['青禾网络','后端开发工程师','筛选中','深圳','补充作品集链接','',-3,'普通'],
+    ['见微实验室','机器学习工程师','已投递','北京','','',-20,'重点关注'],
+    ['长川软件','研发工程师','Offer','成都','确认录用意向与入职安排',shiftDay(today,5)+'T16:00',-18,'普通'],
+    ['云帆科技','平台开发工程师','已结束','上海','','',-16,'普通'],
+    ['原点机器人','感知算法工程师','待投递','苏州','','',-1,'普通'],
+  ];
+  return fixtures.map(([company,role,status,city,next_action,due_at,days,priority],i)=>{const applied_on=shiftDay(today,days),id='demo-'+i;const recentDay=i===4?applied_on:shiftDay(today,-(i%3));return {id,company,role,status,city,company_type:['民企','民企','外企','民企','事业单位','国企','合资企业','民企'][i],industry:['互联网','人工智能','金融','互联网','教育科研','制造业','通信','制造业'][i],next_action,due_at,priority,applied_on,channel:i%2?'内推':'招聘官网',url:i<3?'https://example.com/careers/'+id:'',resume:i%2?'通用技术版 v2':'算法方向 v3',note:i===0?'重点准备：项目中的技术取舍、评估指标和失败案例。\n这是一条虚构的示例记录。':'这是一条虚构的示例记录，仅用于预览。',created_at:applied_on+'T10:00:00',updated_at:recentDay+'T14:00:00',events:[{id:id+'-1',status:'已投递',occurred_on:applied_on,created_at:applied_on+'T10:00:00',note:'通过招聘官网投递，使用对应方向的简历。',kind:'progress'},...(status!=='已投递'&&status!=='待投递'?[{id:id+'-2',status,occurred_on:recentDay,created_at:recentDay+'T14:00:00',note:i===0?'一面聊了项目设计与评估方式，已收到二面邀请。':'收到新的进展通知，已更新当前阶段。',kind:'progress'}]:[])]};});
+}
+await load();
+
+// Progressive enhancement: supported agent browsers can use the same actions.
+if(document.modelContext?.registerTool){
+  const lifecycle=new AbortController();
+  const register=tool=>{try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{/* Ordinary browsers keep using the visible interface. */}};
+  const requireLive=()=>{if(state.demo)throw new Error('示例预览是只读的，请先返回我的记录。');};
+  register({name:'search_applications',title:'查找秋招投递',description:'读取当前工作台的投递记录，返回匹配公司的岗位、编号、当前阶段和下一步。示例模式返回的记录会明确标记。',inputSchema:{type:'object',properties:{query:{type:'string'}},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute(input={}){if(typeof input.query!=='undefined'&&typeof input.query!=='string')throw new Error('query 必须是文字');return {demo:state.demo,applications:filterApps(apps(),{query:input.query||''}).map(({id,company,role,company_type,industry,status,next_action,due_at})=>({id,company,role,company_type,industry,status,next_action,due_at}))};}});
+  register({name:'create_application',title:'记录新投递',description:'创建并保存一份真实投递，然后打开它的详情。需要公司和岗位；同一公司同名岗位不可重复。',inputSchema:{type:'object',properties:{company:{type:'string'},role:{type:'string'},company_type:{type:'string',enum:['',...COMPANY_TYPES]},industry:{type:'string',enum:['',...INDUSTRIES]},status:{type:'string',enum:STATUSES},city:{type:'string'},url:{type:'string',description:'投递官网或岗位页面的完整 http/https 地址'},next_action:{type:'string'},due_at:{type:'string',description:'本地时间，YYYY-MM-DDTHH:MM；有时间时必须填写 next_action'}},required:['company','role'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},async execute(input){requireLive();const result=await request('/api/applications','POST',input);acceptApp(result);openDetail(result.id);notify('投递已记录');return {id:result.id,company:result.company,role:result.role,status:result.status};}});
+  register({name:'add_application_progress',title:'保存投递进展',description:'为指定编号的真实投递追加进展并更新当前阶段。省略下一步与时间会保留原待办；传空字符串可清除。',inputSchema:{type:'object',properties:{id:{type:'string'},status:{type:'string',enum:STATUSES},note:{type:'string'},occurred_on:{type:'string',description:'YYYY-MM-DD'},next_action:{type:'string'},due_at:{type:'string'}},required:['id','status'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},async execute(input){requireLive();if(typeof input?.id!=='string'||!input.id)throw new Error('请提供投递编号');const {id,...data}=input;const result=await request(`/api/applications/${encodeURIComponent(id)}/events`,'POST',data);acceptApp(result);notify('进展已保存');return {id:result.id,status:result.status,next_action:result.next_action,due_at:result.due_at};}});
+  window.addEventListener('pagehide',event=>{if(!event.persisted)lifecycle.abort();});
+}

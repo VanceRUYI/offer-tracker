@@ -1,0 +1,261 @@
+"""Durable local application records. No third-party dependencies."""
+import json
+import sqlite3
+import threading
+import uuid
+from contextlib import contextmanager
+from datetime import date, datetime
+from pathlib import Path
+from urllib.parse import urlsplit
+
+STATUSES = ['待投递', '已投递', '筛选中', '测评', '笔试', '一面', '二面', '终面', 'HR面', 'Offer', '已结束', '待确认']
+TERMINAL = {'已结束'}
+COMPANY_TYPES = ['央企', '国企', '民企', '外企', '合资企业', '事业单位', '其他']
+INDUSTRIES = ['互联网', '人工智能', '金融', '制造业', '能源', '通信', '医疗健康', '教育科研', '消费零售', '其他']
+FIELDS = ('company', 'role', 'status', 'priority', 'applied_on', 'city', 'channel', 'url', 'resume', 'note', 'next_action', 'due_at', 'company_type', 'industry')
+
+
+class ValidationError(ValueError):
+    pass
+
+
+def now():
+    return datetime.now().isoformat(timespec='microseconds')
+
+
+def text(value, name, limit=1000):
+    if not isinstance(value, str):
+        raise ValidationError(name + '必须是文字')
+    value = value.strip()
+    if len(value) > limit:
+        raise ValidationError(name + '过长')
+    return value
+
+
+def valid_date(value, name, with_time=False, optional=False):
+    value = text(value, name, 32)
+    if not value and optional:
+        return ''
+    try:
+        if with_time:
+            parsed = datetime.strptime(value, '%Y-%m-%dT%H:%M')
+            if parsed.strftime('%Y-%m-%dT%H:%M') != value:
+                raise ValueError()
+        else:
+            if date.fromisoformat(value).isoformat() != value:
+                raise ValueError()
+    except ValueError:
+        raise ValidationError(name + '格式不正确，请使用有效日期')
+    return value
+
+
+def normalize(data, base=None):
+    if not isinstance(data, dict):
+        raise ValidationError('记录格式不正确')
+    result = {key: '' for key in FIELDS}
+    result.update(status='已投递', priority='普通', applied_on=date.today().isoformat())
+    if base:
+        result.update({key: base.get(key, '') for key in FIELDS})
+    result.update({key: data[key] for key in FIELDS if key in data})
+    for key in FIELDS:
+        result[key] = text(result[key], key, 20000 if key == 'note' else 2000)
+    if not result['company'] or not result['role']:
+        raise ValidationError('请填写公司和岗位')
+    if len(result['company']) > 160 or len(result['role']) > 200:
+        raise ValidationError('公司或岗位名称过长')
+    if result['status'] not in STATUSES:
+        raise ValidationError('请选择有效阶段')
+    if result['priority'] not in ('普通', '重点关注'):
+        raise ValidationError('请选择有效优先级')
+    for key, label, values in [('company_type','企业性质',COMPANY_TYPES), ('industry','所属行业',INDUSTRIES)]:
+        if result[key] and result[key] not in values:
+            raise ValidationError('请选择有效的' + label)
+    result['applied_on'] = valid_date(result['applied_on'], '投递日期')
+    result['due_at'] = valid_date(result['due_at'], '安排时间', True, True)
+    if result['url']:
+        parsed = urlsplit(result['url'])
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+            raise ValidationError('岗位链接请以 http:// 或 https:// 开头')
+    if result['due_at'] and not result['next_action']:
+        raise ValidationError('设置时间时，请填写下一步要做什么')
+    if result['status'] in TERMINAL:
+        result['next_action'] = result['due_at'] = ''
+    return result
+
+
+class Store:
+    def __init__(self, path):
+        self.path = Path(path).resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
+        with self.connect() as con:
+            con.executescript('''
+                CREATE TABLE IF NOT EXISTS applications (
+                    id TEXT PRIMARY KEY,
+                    company TEXT NOT NULL COLLATE NOCASE,
+                    role TEXT NOT NULL COLLATE NOCASE,
+                    payload TEXT NOT NULL,
+                    UNIQUE(company, role)
+                );
+                CREATE TABLE IF NOT EXISTS events (
+                    id TEXT PRIMARY KEY,
+                    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_events_application_id ON events(application_id);
+                PRAGMA user_version = 1;
+            ''')
+
+    @contextmanager
+    def connect(self):
+        con = sqlite3.connect(str(self.path), timeout=10)
+        con.execute('PRAGMA foreign_keys = ON')
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
+
+    def _get(self, con, app_id):
+        row = con.execute('SELECT payload FROM applications WHERE id=?', (app_id,)).fetchone()
+        if row is None:
+            raise KeyError('这条投递已不存在，请刷新列表')
+        app = json.loads(row[0])
+        app.setdefault('company_type', '')
+        app.setdefault('industry', '')
+        app['events'] = [json.loads(r[0]) for r in con.execute('SELECT payload FROM events WHERE application_id=? ORDER BY rowid', (app_id,))]
+        return app
+
+    def get(self, app_id):
+        with self.connect() as con:
+            return self._get(con, app_id)
+
+    def list(self):
+        with self.connect() as con:
+            return [self._get(con, r[0]) for r in con.execute('SELECT id FROM applications ORDER BY rowid DESC').fetchall()]
+
+    def _save(self, con, app):
+        payload = {key: value for key, value in app.items() if key != 'events'}
+        try:
+            con.execute('''INSERT INTO applications(id, company, role, payload) VALUES(?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET company=excluded.company, role=excluded.role, payload=excluded.payload''',
+                (app['id'], app['company'], app['role'], json.dumps(payload, ensure_ascii=False)))
+        except sqlite3.IntegrityError:
+            raise ValidationError('这个公司的同名岗位已经记录过了，可以在原记录上添加进展')
+
+    def _event(self, con, app_id, status, note, occurred_on=None, kind='progress'):
+        event = {'id': str(uuid.uuid4()), 'status': status, 'note': note,
+                 'occurred_on': occurred_on or date.today().isoformat(), 'created_at': now(), 'kind': kind}
+        con.execute('INSERT INTO events VALUES(?,?,?)', (event['id'], app_id, json.dumps(event, ensure_ascii=False)))
+
+    def create(self, data):
+        app = normalize(data)
+        app.update(id=str(uuid.uuid4()), created_at=now(), updated_at=now())
+        with self.lock, self.connect() as con:
+            self._save(con, app)
+            self._event(con, app['id'], app['status'], '建立投递记录', app['applied_on'])
+            return self._get(con, app['id'])
+
+    def update(self, app_id, data):
+        with self.lock, self.connect() as con:
+            old = self._get(con, app_id)
+            app = {**old, **normalize(data, old), 'updated_at': now()}
+            self._save(con, app)
+            if old['status'] != app['status']:
+                self._event(con, app_id, app['status'], '阶段更新：' + old['status'] + ' → ' + app['status'])
+            return self._get(con, app_id)
+
+    def add_event(self, app_id, data):
+        if not isinstance(data, dict):
+            raise ValidationError('进展格式不正确')
+        note = text(data.get('note', ''), '进展记录', 20000)
+        day = valid_date(data.get('occurred_on', date.today().isoformat()), '发生日期')
+        with self.lock, self.connect() as con:
+            old = self._get(con, app_id)
+            changes = {'status': data.get('status', old['status'])}
+            for key in ('next_action', 'due_at'):
+                if key in data:
+                    changes[key] = data[key]
+            app = {**old, **normalize(changes, old), 'updated_at': now()}
+            self._save(con, app)
+            self._event(con, app_id, app['status'], note or '更新了投递进展', day)
+            return self._get(con, app_id)
+
+    def complete(self, app_id):
+        with self.lock, self.connect() as con:
+            app = self._get(con, app_id)
+            if app['next_action']:
+                self._event(con, app_id, app['status'], '已完成：' + app['next_action'], kind='task')
+                app.update(next_action='', due_at='', updated_at=now())
+                self._save(con, app)
+            return self._get(con, app_id)
+
+    def backup(self, label='manual'):
+        folder = self.path.parent / 'backups'
+        folder.mkdir(exist_ok=True)
+        filename = (date.today().isoformat() + '-daily.sqlite3' if label == 'daily' else datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '-' + label + '.sqlite3')
+        target = folder / filename
+        with self.lock:
+            if label == 'daily' and target.exists():
+                return target
+            with self.connect() as source:
+                dest = sqlite3.connect(str(target))
+                try:
+                    source.backup(dest)
+                finally:
+                    dest.close()
+        return target
+
+    def delete(self, app_id):
+        with self.lock:
+            self.get(app_id)
+            self.backup('before-delete')
+            with self.connect() as con:
+                con.execute('DELETE FROM applications WHERE id=?', (app_id,))
+
+    def export(self):
+        return {'format': 'autumn-workbench', 'version': 1, 'exported_at': now(), 'applications': self.list()}
+
+    def import_data(self, data):
+        if not isinstance(data, dict) or data.get('format') != 'autumn-workbench' or data.get('version') != 1:
+            raise ValidationError('请选择本工作台导出的 JSON 备份文件')
+        apps = data.get('applications')
+        if not isinstance(apps, list):
+            raise ValidationError('备份记录列表不正确')
+        validated, seen_ids, seen_event_ids = [], set(), set()
+        for item in apps:
+            app = normalize(item)
+            app_id = text(item.get('id'), '记录编号', 100)
+            if not app_id or app_id in seen_ids:
+                raise ValidationError('备份存在空编号或重复编号')
+            seen_ids.add(app_id)
+            app.update(id=app_id, created_at=text(item.get('created_at', now()), '创建时间', 40), updated_at=text(item.get('updated_at', now()), '更新时间', 40))
+            events = item.get('events', [])
+            if not isinstance(events, list):
+                raise ValidationError('时间线格式不正确')
+            app['events'] = []
+            for entry in events:
+                if not isinstance(entry, dict):
+                    raise ValidationError('时间线格式不正确')
+                event_id = text(entry.get('id'), '进展编号', 100)
+                if not event_id or event_id in seen_event_ids or entry.get('status') not in STATUSES:
+                    raise ValidationError('时间线编号或阶段不正确')
+                seen_event_ids.add(event_id)
+                app['events'].append({'id': event_id, 'status': entry['status'], 'note': text(entry.get('note', ''), '进展记录', 20000), 'occurred_on': valid_date(entry.get('occurred_on'), '进展日期'), 'created_at': text(entry.get('created_at', now()), '进展创建时间', 40), 'kind': 'task' if entry.get('kind') == 'task' else 'progress'})
+            validated.append(app)
+        with self.lock:
+            self.backup('before-import')
+            imported = skipped = 0
+            with self.connect() as con:
+                for app in validated:
+                    if con.execute('SELECT 1 FROM applications WHERE id=? OR (company=? AND role=?)', (app['id'], app['company'], app['role'])).fetchone():
+                        skipped += 1
+                        continue
+                    for event in app['events']:
+                        if con.execute('SELECT 1 FROM events WHERE id=?', (event['id'],)).fetchone():
+                            raise ValidationError('进展编号与现有记录冲突，未导入任何记录')
+                    self._save(con, app)
+                    for event in app['events']:
+                        con.execute('INSERT INTO events VALUES(?,?,?)', (event['id'], app['id'], json.dumps(event, ensure_ascii=False)))
+                    imported += 1
+            return {'imported': imported, 'skipped': skipped}
