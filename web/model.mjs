@@ -13,6 +13,11 @@ export function shiftMonth(month, amount) {
   d.setMonth(d.getMonth()+amount);
   return dayKey(d).slice(0,7);
 }
+export function calendarDate(year, month, day) {
+  if(![year,month,day].every(Number.isInteger) || year<1000 || year>9998 || month<1 || month>12 || day<1 || day>31)return '';
+  const last=new Date(year,month,0).getDate();
+  return `${year}-${String(month).padStart(2,'0')}-${String(Math.min(day,last)).padStart(2,'0')}`;
+}
 export function calendarDays(apps, month) {
   const first=month+'-01', date=new Date(first+'T12:00:00');
   const offset=(date.getDay()+6)%7;

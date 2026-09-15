@@ -606,6 +606,14 @@ select[hidden] { display:none!important; }
 .calendar-navigation .icon-button { border-radius:8px; }
 .calendar-navigation .button { min-height:32px; padding:5px 13px; }
 .calendar-prev svg { transform:rotate(180deg); }
+.calendar-jump { display:flex; align-items:center; gap:12px; padding:0 26px 18px; }
+.calendar-jump>span { font-size:11px; color:var(--muted); white-space:nowrap; }
+.calendar-jump form { display:flex; align-items:center; gap:8px; }
+.calendar-year { display:flex; align-items:center; gap:4px; padding:0 9px; height:36px; border:1px solid #e5e5e5; border-radius:8px; background:white; font-size:12px; color:var(--muted); }
+.calendar-year input { width:48px; min-width:0; border:0; background:none; color:var(--ink); padding:0; font-size:12px; font-variant-numeric:tabular-nums; appearance:textfield; }
+.calendar-year input::-webkit-inner-spin-button,.calendar-year input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+.calendar-jump .choice-trigger { min-width:76px; }
+.calendar-jump .button { min-height:36px; padding:6px 12px; }
 .calendar-weekdays { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); border-top:1px solid var(--line); background:#fafbf8; }
 .calendar-weekdays span { text-align:right; padding:10px 12px; font-size:11px; color:var(--muted); }
 .calendar-weekdays span:nth-child(n+6) { color:var(--subtle); }
@@ -640,6 +648,13 @@ select[hidden] { display:none!important; }
 .calendar-agenda .empty-state p { margin-bottom:0; }
 .calendar-agenda .empty-actions:empty { display:none; }
 @media(max-width:700px) {
+  .calendar-jump { display:block; padding:0 18px 17px; }
+  .calendar-jump>span { display:block; margin-bottom:8px; }
+  .calendar-jump form { display:grid; grid-template-columns:1.1fr 1fr 1fr auto; gap:6px; }
+  .calendar-year { min-width:0; padding:0 6px; }
+  .calendar-year input { width:100%; }
+  .calendar-jump .choice-trigger { width:100%; min-width:0; padding:7px; gap:3px; }
+  .calendar-jump .button { padding:6px 9px; }
   .calendar-heading { padding:20px 18px 16px; }
   .calendar-heading .segmented button { padding:5px 11px; }
   .calendar-toolbar { padding:0 18px 17px; gap:10px; }

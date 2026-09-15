@@ -1,5 +1,5 @@
 import {enhanceSelects, closeSelectMenu} from './selects.mjs';
-import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, shiftMonth, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {STATUSES, INTERVIEWS, COMPANY_TYPES, INDUSTRIES, dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
 
 const $ = (s, root=document) => root.querySelector(s);
 const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -34,7 +34,7 @@ document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.datase
 document.querySelectorAll('[data-nav]').forEach(el=>el.setAttribute('aria-label',el.textContent.trim()));
 const routeNames={overview:'近期安排',applications:'投递记录',backup:'数据备份'};
 const initialRoute=location.hash.slice(1);
-const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',industry:'',sort:'newest',day:'',scope:'week',calendarView:'month',calendarMonth:dayKey().slice(0,7),error:''};
+const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',industry:'',sort:'newest',day:'',scope:'week',calendarView:'week',calendarMonth:dayKey().slice(0,7),error:''};
 let demoApps=[], toastTimer, formSnapshot='', recognitionPreview=null;
 const apps=()=>state.demo?demoApps:state.apps;
 const findApp=id=>apps().find(a=>a.id===id);
@@ -88,13 +88,19 @@ function render(){
 }
 function monthTitle(month){return `${Number(month.slice(0,4))} 年 ${Number(month.slice(5))} 月`;}
 function selectedCalendarDay(){return state.day || (state.calendarMonth===dayKey().slice(0,7)?dayKey():state.calendarMonth+'-01');}
-function calendarViewHeader(){return `<div class="panel-head calendar-heading"><h2>我的日程</h2><div class="segmented" aria-label="日历视图">${[['month','月历'],['week','近 7 天']].map(([view,label])=>`<button id="calendar-view-${view}" data-action="calendar-view" data-view="${view}" aria-pressed="${state.calendarView===view}" class="${state.calendarView===view?'active':''}">${label}</button>`).join('')}</div></div>`;}
+function calendarViewHeader(){return `<div class="panel-head calendar-heading"><h2>我的日程</h2><div class="segmented" aria-label="日历视图">${[['week','近 7 天'],['month','日历']].map(([view,label])=>`<button id="calendar-view-${view}" data-action="calendar-view" data-view="${view}" aria-pressed="${state.calendarView===view}" class="${state.calendarView===view?'active':''}">${label}</button>`).join('')}</div></div>`;}
+function calendarJumpForm(day){
+  const [year,month,date]=day.split('-').map(Number);
+  const last=Number(calendarDate(year,month,31).slice(8));
+  const numberedOptions=(n,value,unit)=>Array.from({length:n},(_,i)=>`<option value="${i+1}" ${i+1===value?'selected':''}>${i+1} ${unit}</option>`).join('');
+  return `<div class="calendar-jump"><span>跳转日期</span><form id="calendarJumpForm" aria-label="选择年月日"><label class="calendar-year"><input id="calendarYear" name="year" type="number" min="1000" max="9998" step="1" value="${year}" required aria-label="选择年份"><span>年</span></label><select id="calendarMonth" name="month" class="compact-select" aria-label="选择月份">${numberedOptions(12,month,'月')}</select><select id="calendarDay" name="day" class="compact-select" aria-label="选择日期">${numberedOptions(last,date,'日')}</select><button class="button small" type="submit">查看</button></form></div>`;
+}
 function monthCalendar(all){
   const days=calendarDays(all,state.calendarMonth), selected=selectedCalendarDay(), today=dayKey();
   const total=days.filter(d=>d.inMonth).reduce((n,d)=>n+d.items.length,0);
   return `<section class="panel calendar-panel" aria-label="月历">${calendarViewHeader()}
     <div class="calendar-toolbar"><div><h3 id="calendar-month-label" aria-live="polite">${monthTitle(state.calendarMonth)}</h3><p>本月 ${total} 项待办</p></div><div class="calendar-navigation"><button id="calendar-prev" class="icon-button calendar-prev" data-action="calendar-month" data-offset="-1" aria-label="上个月">${icon('chevron')}</button><button id="calendar-today" class="button small" data-action="calendar-today">今天</button><button id="calendar-next" class="icon-button" data-action="calendar-month" data-offset="1" aria-label="下个月">${icon('chevron')}</button></div></div>
-    <div class="calendar-weekdays" aria-hidden="true">${['周一','周二','周三','周四','周五','周六','周日'].map(d=>`<span>${d}</span>`).join('')}</div>
+    ${calendarJumpForm(selected)}<div class="calendar-weekdays" aria-hidden="true">${['周一','周二','周三','周四','周五','周六','周日'].map(d=>`<span>${d}</span>`).join('')}</div>
     <div class="month-grid" role="group" aria-labelledby="calendar-month-label">${days.map(({day,inMonth,items})=>`<div class="calendar-cell ${inMonth?'':'outside-month'} ${day===selected?'is-selected':''}">
       <button class="calendar-date ${day===today?'is-today':''}" data-action="calendar-day" data-day="${day}" aria-label="${day}，${items.length} 项安排" aria-pressed="${day===selected}" ${day===today?'aria-current="date"':''}><time datetime="${day}">${Number(day.slice(8))}</time>${items.length?`<span class="calendar-day-count">${items.length} 项</span>`:''}</button>
       <div class="calendar-events">${items.slice(0,2).map(a=>`<button class="calendar-event ${tone(a.status)||'active'}" data-action="detail" data-id="${escape(a.id)}" aria-label="${escape(a.due_at.replace('T',' '))}，${escape(a.company)}，${escape(a.next_action)}" title="${escape(a.due_at.slice(11,16)+' · '+a.company+' · '+a.next_action)}"><span class="calendar-event-meta"><time>${escape(a.due_at.slice(11,16))}</time><span>${escape(a.company)}</span></span><span class="calendar-event-title">${escape(a.next_action)}</span></button>`).join('')}</div>
@@ -302,6 +308,12 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('change',async event=>{
   const el=event.target;
+  if(el.form?.id==='calendarJumpForm' && ['year','month'].includes(el.name)){
+    const form=el.form,year=Number(form.elements.year.value),month=Number(form.elements.month.value);
+    const last=calendarDate(year,month,31);
+    if(last){const day=Number(calendarDate(year,month,Number(form.elements.day.value)).slice(8));form.elements.day.innerHTML=Array.from({length:Number(last.slice(8))},(_,i)=>`<option value="${i+1}" ${i+1===day?'selected':''}>${i+1} 日</option>`).join('');enhanceSelects(form);}
+    return;
+  }
   if(el.closest('#recordForm')&&['status','applied_on'].includes(el.name))el.dataset.touched='true';
   if(el.id==='companyTypeFilter'||el.id==='industryFilter'){state[el.id==='companyTypeFilter'?'company_type':'industry']=el.value;render();return;}
   if(el.id==='stageFilter'){state.status=el.value;render();return;}
@@ -363,4 +375,14 @@ document.addEventListener('keydown',event=>{
   if(!(event.key in offsets))return;
   event.preventDefault();event.stopPropagation();
   selectCalendarDay(shiftDay(button.dataset.day,offsets[event.key]),true);
+});
+
+document.addEventListener('submit',event=>{
+  if(event.target.id!=='calendarJumpForm')return;
+  event.preventDefault();
+  const form=event.target;
+  const date=calendarDate(Number(form.elements.year.value),Number(form.elements.month.value),Number(form.elements.day.value));
+  if(!date)return;
+  selectCalendarDay(date);
+  $('#calendarJumpForm button[type="submit"]')?.focus({preventScroll:true});
 });

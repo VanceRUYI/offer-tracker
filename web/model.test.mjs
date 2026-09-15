@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dayKey, shiftDay, shiftMonth, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, taskGroups, filterApps, waitingApps} from './model.mjs';
+
+test('date picker clamps month-end dates and validates year, month, and day', () => {
+  assert.equal(calendarDate(2026,2,31),'2026-02-28');
+  assert.equal(calendarDate(2024,2,31),'2024-02-29');
+  assert.equal(calendarDate(2026,4,31),'2026-04-30');
+  assert.equal(calendarDate(2031,12,5),'2031-12-05');
+  for(const parts of [[0,1,1],[2026,13,1],[2026,1,0],[2026,1,32],[2026.5,1,1],[2026,2,NaN]]) {
+    assert.equal(calendarDate(...parts),'');
+  }
+});
 
 test('month navigation handles year boundaries independently of the current day', () => {
   assert.equal(shiftMonth('2026-12',1),'2027-01');
