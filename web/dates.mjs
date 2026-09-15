@@ -32,6 +32,7 @@ export function enhanceDates(root = document) {
       closeDatePicker(); closeSelectMenu();
       let selected = input.value.slice(0,10) || dayKey();
       let month = selected.slice(0,7);
+      let yearPage = 0;
       let hour = input.value.slice(11,13) || '09', minute = input.value.slice(14,16) || '00';
       const min = input.min.slice(0,10)||'1900-01-01', max = input.max.slice(0,10)||'9999-12-31';
       const allowed = day => /^\d{4}-\d{2}-\d{2}$/.test(day)&&day>=min&&day<=max;
@@ -58,10 +59,26 @@ export function enhanceDates(root = document) {
       const rememberTime = () => {
         if(withTime){hour=panel.querySelector('[data-hour]').value;minute=panel.querySelector('[data-minute]').value;}
       };
+      const renderYears = () => {
+        const first=Number(min.slice(0,4)),last=Number(max.slice(0,4));
+        panel.querySelector('[data-year-range]').textContent=`${yearPage} — ${Math.min(yearPage+11,last)}`;
+        panel.querySelector('[data-year-page="-1"]').disabled=yearPage<=first;
+        panel.querySelector('[data-year-page="1"]').disabled=yearPage+11>=last;
+        panel.querySelector('.date-picker-years').innerHTML=Array.from({length:Math.min(12,last-yearPage+1)},(_,i)=>yearPage+i).map(year=>`<button type="button" data-pick-year="${year}" aria-pressed="${year===Number(month.slice(0,4))}" class="${year===Number(month.slice(0,4))?'is-selected':''}">${year}</button>`).join('');
+      };
+      const showYears = visible => {
+        panel.querySelector('[data-year-chooser]').hidden=!visible;
+        panel.querySelector('.date-picker-weekdays').hidden=visible;
+        panel.querySelector('.date-picker-grid').hidden=visible;
+        panel.querySelector('[data-toggle-years]').setAttribute('aria-expanded',String(visible));
+        if(visible){yearPage=Math.max(Number(min.slice(0,4)),Math.min(Number(month.slice(0,4))-5,Number(max.slice(0,4))-11));renderYears();}
+        position();
+      };
       const draw = (focusDay = '') => {
         const year=Number(month.slice(0,4)), monthNumber=Number(month.slice(5));
         if(!panel.firstElementChild)panel.innerHTML=`<header class="date-picker-heading"><span>${withTime?'安排日期与时间':'选择日期'}</span><button type="button" class="date-picker-icon" data-close aria-label="关闭日期选择">${svg('m6 6 12 12M6 18 18 6')}</button></header>
-          <div class="date-picker-navigation"><button type="button" class="date-picker-icon date-picker-prev" data-month-offset="-1" aria-label="上个月" ${month<=min.slice(0,7)?'disabled':''}>${chevron}</button><div class="date-picker-month"><label><input type="number" value="${year}" min="${Number(min.slice(0,4))}" max="${Number(max.slice(0,4))}" data-year aria-label="年份"><span>年</span></label><label><input type="number" value="${monthNumber}" min="1" max="12" data-month aria-label="月份"><span>月</span></label></div><button type="button" class="date-picker-icon" data-month-offset="1" aria-label="下个月" ${month>=max.slice(0,7)?'disabled':''}>${chevron}</button></div>
+          <div class="date-picker-navigation"><button type="button" class="date-picker-icon date-picker-prev" data-month-offset="-1" aria-label="上个月" ${month<=min.slice(0,7)?'disabled':''}>${chevron}</button><div class="date-picker-month"><label><input type="number" value="${year}" min="${Number(min.slice(0,4))}" max="${Number(max.slice(0,4))}" data-year aria-label="年份"><span>年</span></label><button type="button" class="date-picker-icon date-picker-year-toggle" data-toggle-years aria-label="选择年份" title="选择年份" aria-expanded="false" aria-controls="${input.id}-years">${chevron}</button><label><input type="number" value="${monthNumber}" min="1" max="12" data-month aria-label="月份"><span>月</span></label></div><button type="button" class="date-picker-icon" data-month-offset="1" aria-label="下个月" ${month>=max.slice(0,7)?'disabled':''}>${chevron}</button></div>
+          <section id="${input.id}-years" data-year-chooser hidden aria-label="选择年份"><div class="date-picker-year-pages"><button type="button" class="date-picker-icon date-picker-prev" data-year-page="-1" aria-label="前十二年">${chevron}</button><span data-year-range></span><button type="button" class="date-picker-icon" data-year-page="1" aria-label="后十二年">${chevron}</button></div><div class="date-picker-years"></div></section>
           <div class="date-picker-weekdays" aria-hidden="true">${['一','二','三','四','五','六','日'].map(d=>`<span>${d}</span>`).join('')}</div>
           <div class="date-picker-grid" role="group" aria-label="日期"></div>
           ${withTime?`<div class="date-picker-time"><span>时间 <small>24 小时制</small></span><div><input type="number" data-hour min="0" max="23" value="${hour}" aria-label="小时"><span>:</span><input type="number" data-minute min="0" max="59" value="${minute}" aria-label="分钟"></div></div>`:''}
@@ -80,14 +97,25 @@ export function enhanceDates(root = document) {
         const target=event.target.closest('button');if(!target||target.disabled)return;
         if(target.hasAttribute('data-close'))return close(true);
         if(target.hasAttribute('data-clear'))return commit('');
+        if(target.hasAttribute('data-toggle-years')){
+          showYears(panel.querySelector('[data-year-chooser]').hidden);
+          panel.querySelector('[data-toggle-years]').focus({preventScroll:true});return;
+        }
+        if(target.hasAttribute('data-year-page')){
+          yearPage=Math.max(Number(min.slice(0,4)),Math.min(yearPage+Number(target.dataset.yearPage)*12,Number(max.slice(0,4))-11));renderYears();return;
+        }
+        if(target.hasAttribute('data-pick-year')){
+          rememberTime();month=target.dataset.pickYear+month.slice(4);showYears(false);draw();
+          panel.querySelector('[data-toggle-years]').focus({preventScroll:true});return;
+        }
         if(target.hasAttribute('data-month-offset')){
-          rememberTime();month=shiftMonth(month,Number(target.dataset.monthOffset));draw();
+          rememberTime();month=shiftMonth(month,Number(target.dataset.monthOffset));showYears(false);draw();
           panel.querySelector(`[data-month-offset="${target.dataset.monthOffset}"]`)?.focus({preventScroll:true});return;
         }
         if(target.dataset.date||target.hasAttribute('data-today')){
           const day=target.dataset.date||dayKey();if(!allowed(day))return;
           if(!withTime)return commit(day);
-          rememberTime();selected=day;month=day.slice(0,7);draw(day);return;
+          rememberTime();selected=day;month=day.slice(0,7);showYears(false);draw(day);return;
         }
         if(target.hasAttribute('data-done')){
           const inputs=[...panel.querySelectorAll('input')];
@@ -101,10 +129,10 @@ export function enhanceDates(root = document) {
         const y=panel.querySelector('[data-year]'),m=panel.querySelector('[data-month]');
         if(!y.value||!m.value||!y.checkValidity()||!m.checkValidity())return;
         rememberTime();month=`${y.value.padStart(4,'0')}-${m.value.padStart(2,'0')}`;
-        draw();
+        showYears(false);draw();
       });
       panel.addEventListener('keydown',event=>{
-        if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close(true);return;}
+        if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(!panel.querySelector('[data-year-chooser]').hidden){showYears(false);panel.querySelector('[data-toggle-years]').focus({preventScroll:true});}else close(true);return;}
         if(event.key==='Enter'&&event.target.matches('input')){
           event.preventDefault();event.target.dispatchEvent(new Event('change',{bubbles:true}));return;
         }
