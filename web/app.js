@@ -93,7 +93,7 @@ function calendarJumpForm(day){
   const [year,month,date]=day.split('-').map(Number);
   const last=Number(calendarDate(year,month,31).slice(8));
   const numberedOptions=(n,value,unit)=>Array.from({length:n},(_,i)=>`<option value="${i+1}" ${i+1===value?'selected':''}>${i+1} ${unit}</option>`).join('');
-  return `<div class="calendar-jump"><span>跳转日期</span><form id="calendarJumpForm" aria-label="选择年月日"><label class="calendar-year"><input id="calendarYear" name="year" type="number" min="1000" max="9998" step="1" value="${year}" required aria-label="选择年份"><span>年</span></label><select id="calendarMonth" name="month" class="compact-select" aria-label="选择月份">${numberedOptions(12,month,'月')}</select><select id="calendarDay" name="day" class="compact-select" aria-label="选择日期">${numberedOptions(last,date,'日')}</select><button class="button small" type="submit">查看</button></form></div>`;
+  return `<div class="calendar-jump"><span>跳转日期</span><form id="calendarJumpForm" aria-label="选择年月日"><div class="calendar-year"><button id="calendar-prev-year" type="button" class="calendar-year-step calendar-prev" data-action="calendar-year" data-offset="-1" aria-label="上一年" title="上一年" ${year<=1000?'disabled':''}>${icon('chevron')}</button><label><input id="calendarYear" name="year" type="number" min="1000" max="9998" step="1" value="${year}" required aria-label="输入年份" title="直接输入年份，再点击查看"><span>年</span></label><button id="calendar-next-year" type="button" class="calendar-year-step" data-action="calendar-year" data-offset="1" aria-label="下一年" title="下一年" ${year>=9998?'disabled':''}>${icon('chevron')}</button></div><select id="calendarMonth" name="month" class="compact-select" aria-label="选择月份">${numberedOptions(12,month,'月')}</select><select id="calendarDay" name="day" class="compact-select" aria-label="选择日期">${numberedOptions(last,date,'日')}</select><button class="button small" type="submit">查看</button></form></div>`;
 }
 function monthCalendar(all){
   const days=calendarDays(all,state.calendarMonth), selected=selectedCalendarDay(), today=dayKey();
@@ -281,6 +281,12 @@ document.addEventListener('click',async event=>{
   if(action==='refresh'){await load();if(!state.error)notify('记录已刷新');return;}
   if(action==='demo'){state.demo=!state.demo;if(state.demo)demoApps=makeDemo();$('#drawer').close();state.day='';render();return;}
   if(action==='calendar-view'){state.calendarView=button.dataset.view;state.day='';render();document.getElementById(button.id)?.focus({preventScroll:true});return;}
+  if(action==='calendar-year'){
+    const form=$('#calendarJumpForm');
+    const day=calendarDate(Number(form.elements.year.value)+Number(button.dataset.offset),Number(form.elements.month.value),Number(form.elements.day.value));
+    if(!day){form.elements.year.reportValidity();return;}
+    selectCalendarDay(day);document.getElementById(button.id)?.focus({preventScroll:true});return;
+  }
   if(action==='calendar-month'){state.calendarMonth=shiftMonth(state.calendarMonth,Number(button.dataset.offset));state.day=state.calendarMonth+'-01';render();document.getElementById(button.id)?.focus({preventScroll:true});return;}
   if(action==='calendar-today'){state.calendarMonth=dayKey().slice(0,7);state.day=dayKey();render();$('#calendar-today')?.focus({preventScroll:true});return;}
   if(action==='calendar-day'){selectCalendarDay(button.dataset.day);if(button.classList.contains('calendar-more'))$('#scheduleAgenda').focus();return;}

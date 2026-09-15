@@ -607,7 +607,13 @@ select[hidden] { display:none!important; }
 .calendar-jump { display:flex; align-items:center; gap:12px; padding:0 26px 18px; }
 .calendar-jump>span { font-size:11px; color:var(--muted); white-space:nowrap; }
 .calendar-jump form { display:flex; align-items:center; gap:8px; }
-.calendar-year { display:flex; align-items:center; gap:4px; padding:0 9px; height:36px; border:1px solid #e5e5e5; border-radius:8px; background:white; font-size:12px; color:var(--muted); }
+.calendar-year { display:flex; align-items:center; gap:2px; padding:0 3px; height:36px; border:1px solid #e5e5e5; border-radius:8px; background:white; font-size:12px; color:var(--muted); }
+.calendar-year label { display:flex; align-items:center; gap:3px; min-width:0; }
+.calendar-year:focus-within { border-color:var(--muted); }
+.calendar-year-step { display:grid; place-items:center; flex:none; width:24px; height:30px; padding:0; border:0; border-radius:5px; background:transparent; color:var(--muted); cursor:pointer; }
+.calendar-year-step:hover { background:var(--bg); color:var(--ink); }
+.calendar-year-step:disabled { opacity:.35; cursor:default; }
+.calendar-year-step svg { width:13px; height:13px; }
 .calendar-year input { width:48px; min-width:0; border:0; background:none; color:var(--ink); padding:0; font-size:12px; font-variant-numeric:tabular-nums; appearance:textfield; }
 .calendar-year input::-webkit-inner-spin-button,.calendar-year input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
 .calendar-jump .choice-trigger { min-width:76px; }
@@ -648,8 +654,8 @@ select[hidden] { display:none!important; }
 @media(max-width:700px) {
   .calendar-jump { display:block; padding:0 18px 17px; }
   .calendar-jump>span { display:block; margin-bottom:8px; }
-  .calendar-jump form { display:grid; grid-template-columns:1.1fr 1fr 1fr auto; gap:6px; }
-  .calendar-year { min-width:0; padding:0 6px; }
+  .calendar-jump form { display:grid; grid-template-columns:minmax(110px,1.4fr) 1fr 1fr auto; gap:6px; }
+  .calendar-year { min-width:0; padding:0 2px; }
   .calendar-year input { width:100%; }
   .calendar-jump .choice-trigger { width:100%; min-width:0; padding:7px; gap:3px; }
   .calendar-jump .button { padding:6px 9px; }
