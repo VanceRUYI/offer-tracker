@@ -338,8 +338,6 @@ dialog[open] { animation:sheet-in .25s var(--ease); }
 .recognition-result .recognition-hint { font-size:11px; color:var(--muted); margin:10px 0; }
 .recognition-fact { margin-top:9px; color:var(--muted); }
 .recognition-error { color:var(--red); }
-.classification-fields { margin-top:22px; padding-top:19px; border-top:1px solid var(--line); }
-.classification-hint { margin:9px 0 0; color:var(--muted); font-size:11px; line-height:1.8; }
 .spacer { height:16px; }
 /* Intermediate windows retain the desktop navigation and use roomy record cards. */
 @media(min-width:1600px) { main { padding-top:42px; } .overview-grid { grid-template-columns:minmax(0,1fr) 330px; } }
