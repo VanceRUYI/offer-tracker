@@ -1,11 +1,40 @@
+# Local application data and SQLite snapshots
 data/
-__pycache__/
-*.pyc
-.DS_Store
+backups/
+exports/
+*.db
+*.db-*
 *.sqlite
+*.sqlite-*
 *.sqlite3
 *.sqlite3-*
+
+# Files exported by the workbench
+秋招手帖-*.json
+秋招手帖-*.csv
+autumn-workbench-backup.json
+autumn-applications.csv
+
+# Python environments and caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local secrets, dependencies, and temporary output
 .env
 .env.*
 !.env.example
-.venv/
+node_modules/
+*.log
+*.tmp
+*.swp
+
+# OS metadata
+.DS_Store
+._*
+Thumbs.db
