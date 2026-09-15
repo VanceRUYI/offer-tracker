@@ -14,6 +14,14 @@ COMPANY_TYPES = ['央企', '国企', '民企', '外企', '合资企业', '事业
 INDUSTRIES = ['互联网', '人工智能', '金融', '制造业', '能源', '通信', '医疗健康', '教育科研', '消费零售', '其他']
 FIELDS = ('company', 'role', 'status', 'priority', 'applied_on', 'city', 'channel', 'url', 'resume', 'note', 'next_action', 'due_at', 'company_type', 'industry')
 
+PERSONALIZATION_DEFAULTS = {
+    'tagline': '今天也按自己的节奏来',
+    'title': '留一点空间给自己',
+    'body': '安排记在这里，精力留给准备。\n完成一件，就轻轻划掉一件。',
+    'icon': 'leaf',
+}
+PERSONALIZATION_ICONS = {'leaf': '叶子', 'sun': '太阳', 'star': '星星', 'heart': '爱心', 'coffee': '咖啡', 'compass': '指南针'}
+
 
 class ValidationError(ValueError):
     pass
@@ -30,6 +38,19 @@ def text(value, name, limit=1000):
     if len(value) > limit:
         raise ValidationError(name + '过长')
     return value
+
+
+def normalize_personalization(data, base=None):
+    if not isinstance(data, dict) or set(data) - PERSONALIZATION_DEFAULTS.keys():
+        raise ValidationError('个性化设置格式不正确')
+    result = dict(PERSONALIZATION_DEFAULTS if base is None else base)
+    for key, value in data.items():
+        result[key] = text(value, '个性化内容', {'tagline':80, 'title':40, 'body':300, 'icon':20}[key])
+        if not result[key]:
+            raise ValidationError('请填写内容，或使用恢复默认')
+    if result['icon'] not in PERSONALIZATION_ICONS:
+        raise ValidationError('请选择提供的图标')
+    return result
 
 
 def valid_date(value, name, with_time=False, optional=False):
@@ -103,6 +124,10 @@ class Store:
                     payload TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_events_application_id ON events(application_id);
+                CREATE TABLE IF NOT EXISTS preferences (
+                    key TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                );
                 PRAGMA user_version = 1;
             ''')
 
@@ -115,6 +140,18 @@ class Store:
                 yield con
         finally:
             con.close()
+
+    def personalization(self):
+        with self.connect() as con:
+            row = con.execute("SELECT payload FROM preferences WHERE key='personalization'").fetchone()
+            return normalize_personalization(json.loads(row[0]) if row else {})
+
+    def set_personalization(self, data):
+        with self.lock:
+            result = normalize_personalization(data, self.personalization())
+            with self.connect() as con:
+                con.execute("INSERT INTO preferences(key,payload) VALUES('personalization',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", (json.dumps(result, ensure_ascii=False),))
+            return result
 
     def _get(self, con, app_id):
         row = con.execute('SELECT payload FROM applications WHERE id=?', (app_id,)).fetchone()
@@ -214,11 +251,12 @@ class Store:
                 con.execute('DELETE FROM applications WHERE id=?', (app_id,))
 
     def export(self):
-        return {'format': 'autumn-workbench', 'version': 1, 'exported_at': now(), 'applications': self.list()}
+        return {'format': 'autumn-workbench', 'version': 1, 'exported_at': now(), 'applications': self.list(), 'personalization': self.personalization()}
 
     def import_data(self, data):
         if not isinstance(data, dict) or data.get('format') != 'autumn-workbench' or data.get('version') != 1:
             raise ValidationError('请选择本工作台导出的 JSON 备份文件')
+        preferences = normalize_personalization(data['personalization']) if 'personalization' in data else None
         apps = data.get('applications')
         if not isinstance(apps, list):
             raise ValidationError('备份记录列表不正确')
@@ -258,4 +296,6 @@ class Store:
                     for event in app['events']:
                         con.execute('INSERT INTO events VALUES(?,?,?)', (event['id'], app['id'], json.dumps(event, ensure_ascii=False)))
                     imported += 1
+                if preferences is not None:
+                    con.execute("INSERT OR IGNORE INTO preferences(key,payload) VALUES('personalization',?)", (json.dumps(preferences, ensure_ascii=False),))
             return {'imported': imported, 'skipped': skipped}

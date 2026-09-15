@@ -17,6 +17,34 @@ class StoreTests(unittest.TestCase):
     def create(self, **fields):
         return self.store.create({'company': '示例公司', 'role': '算法工程师', **fields})
 
+    def test_personalization_defaults_persist_and_reset(self):
+        defaults = self.store.personalization()
+        self.assertEqual(defaults['icon'], 'leaf')
+        updated = self.store.set_personalization({'tagline': '慢慢来，也在前进', 'icon': 'star'})
+        self.assertEqual(updated['title'], defaults['title'])
+        self.assertEqual(Store(self.path).personalization(), updated)
+        self.assertEqual(self.store.set_personalization(defaults), defaults)
+        for data in ({'icon': 'javascript:bad'}, {'body': None}, {'tagline': 'a'*81}, {'unexpected': 'value'}):
+            with self.assertRaises(ValidationError):
+                self.store.set_personalization(data)
+        self.assertEqual(self.store.personalization(), defaults)
+
+    def test_personalization_backup_restore_and_old_backup_compatibility(self):
+        preferences = self.store.set_personalization({'title': '给自己一点耐心', 'body': '先做好今天的事。', 'icon': 'sun'})
+        backup = self.store.export()
+        restored = Store(Path(self.temp.name) / 'restored.sqlite3')
+        restored.import_data(backup)
+        self.assertEqual(restored.personalization(), preferences)
+        restored.set_personalization({'title': '自己的寄语'})
+        restored.import_data(backup)
+        self.assertEqual(restored.personalization()['title'], '自己的寄语')
+        old_backup = {k:v for k,v in backup.items() if k != 'personalization'}
+        restored.import_data(old_backup)
+        self.assertEqual(restored.personalization()['title'], '自己的寄语')
+        backup['personalization']['icon'] = '<script>'
+        with self.assertRaises(ValidationError):
+            restored.import_data(backup)
+
     def test_company_classification_persists_and_survives_backup(self):
         app = self.create(company_type='外企', industry='互联网')
         self.assertEqual(app.get('company_type'), '外企')

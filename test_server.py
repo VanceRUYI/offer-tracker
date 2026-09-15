@@ -53,6 +53,17 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request('DELETE', '/api/applications/' + app['id'])[0], 200)
         self.assertEqual(json.loads(self.request('GET', '/api/applications')[1]), [])
 
+    def test_personalization_roundtrip_and_validation(self):
+        status, body = self.request('GET', '/api/personalization')
+        self.assertEqual(status, 200)
+        defaults = json.loads(body)
+        self.assertEqual(defaults['values'], defaults['defaults'])
+        status, body = self.request('PATCH', '/api/personalization', {'icon':'sun', 'title':'保持好奇'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['title'], '保持好奇')
+        self.assertEqual(self.request('PATCH', '/api/personalization', {'icon':'invalid'})[0], 400)
+        self.assertEqual(self.request('PATCH', '/api/personalization', {'icon':'star'}, {'Origin':'https://foreign.example'})[0], 403)
+
     def test_blocks_cross_origin_and_private_files(self):
         self.assertEqual(self.request('POST', '/api/applications', {}, {'Origin': 'https://foreign.example'})[0], 403)
         self.assertEqual(self.request('POST', '/api/applications', {}, {'X-Workbench': ''})[0], 403)

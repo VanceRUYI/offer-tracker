@@ -15,6 +15,10 @@ const paths={
   close:'m6 6 12 12M6 18 18 6',
   check:'m5 12 4 4L19 6',
   clock:'M12 8v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  sun:'M12 3V1m0 22v-2M3 12H1m22 0h-2M5.6 5.6 4.2 4.2m15.6 15.6-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4M17 12a5 5 0 1 1-10 0 5 5 0 0 1 10 0Z',
+  heart:'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z',
+  coffee:'M4 8h13v7a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Zm13 1h2a3 3 0 0 1 0 6h-2M7 2v3m4-3v3m4-3v3M2 23h18',
+  compass:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM16 8l-3 5-5 3 3-5 5-3Z',
   leaf:'M19 3C9 3 3 7 5 14c2 7 14 7 14-11ZM5 21c1-7 5-10 9-13',
   harddrive:'M5 4h14l3 11H2L5 4Zm-3 11v5h20v-5M6 18h.01M10 18h.01',
   eye:'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm13 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
@@ -38,6 +42,7 @@ const initialRoute=location.hash.slice(1);
 const state={apps:[],demo:false,route:routeNames[initialRoute]?initialRoute:'overview',query:'',status:'',priority:false,company_type:'',sort:'newest',day:'',scope:'week',calendarView:'week',calendarMonth:dayKey().slice(0,7),error:''};
 let demoApps=[], toastTimer, createdHighlightTimer, formSnapshot='', recognitionPreview=null;
 state.createdId='';
+let personalization=null, personalSnapshot='';
 const apps=()=>state.demo?demoApps:state.apps;
 const findApp=id=>apps().find(a=>a.id===id);
 const options=(values,value)=>values.map(s=>`<option value="${escape(s)}" ${s===value?'selected':''}>${escape(s)}</option>`).join('');
@@ -59,7 +64,7 @@ async function request(path,method='GET',body){
 }
 function navigate(route){state.route=route;state.day='';if(location.hash!=='#'+route)history.replaceState(null,'','#'+route);render();}
 async function load(){
-  try{state.apps=await request('/api/applications');state.error='';}
+  try{const [records,personal]=await Promise.all([request('/api/applications'),request('/api/personalization')]);state.apps=records;personalization=personal;state.error='';}
   catch(error){state.error=error.message;}
   render();
 }
@@ -138,11 +143,11 @@ function overview(){
   if(!schedule)schedule=all.length?empty('近期安排已清空','有新的笔试、面试或待办时，在岗位里添加进展就好。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-nav="applications">查看投递记录</button>','calendar'):empty('从第一份投递开始','记下公司和岗位，后续的通知、面试和复盘都能接着记录。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button><button class="button" data-action="demo">看看示例</button>');
   const recent=all.flatMap(a=>(a.events||[]).map(e=>({...e,app:a}))).sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,5);
   const waiting=waitingApps(all);
-  return heading('近期安排',dateText+' · '+(groups.overdue.length?`${groups.overdue.length} 项安排需要处理`:groups.today.length?`今天有 ${groups.today.length} 项安排`:'今天也按自己的节奏来'),`<div class="date-label">${today.replaceAll('-',' / ')}</div>`)+
+  return heading('近期安排',dateText+' · '+(groups.overdue.length?`${groups.overdue.length} 项安排需要处理`:groups.today.length?`今天有 ${groups.today.length} 项安排`:escape(personalization.values.tagline)),`<div class="overview-aside"><div class="date-label">${today.replaceAll('-',' / ')}</div><button class="text-button personalize-entry" data-action="personalize">${icon('edit')}个性化</button></div>`)+
     `<section class="stats" aria-label="投递概览">${stats.map(([name,n,symbol,filter])=>`<button class="stat" data-action="stat" data-filter="${filter}"><span class="stat-label">${name}</span><span class="stat-number">${n}<em>份</em></span>${icon(symbol)}</button>`).join('')}</section>
     ${state.calendarView==='month'?monthCalendar(all):''}<div class="overview-grid"><section id="scheduleAgenda" tabindex="-1" class="panel ${state.calendarView==='month'?'calendar-agenda':''}" aria-label="待办清单">${state.calendarView==='month'?`<div class="panel-head"><h2>${new Date(scheduleDay+'T12:00:00').toLocaleDateString('zh-CN',{month:'long',day:'numeric',weekday:'long'})}</h2><small>${scheduleDay.slice(0,4)}</small></div>`:`${calendarViewHeader()}<div class="week-strip">${week}</div><div class="schedule-toolbar"><span>${state.day?prettyDate(state.day):'待办安排'}${state.day?'<button class="text-button" data-action="clear-day">显示全部</button>':''}</span><div class="segmented" aria-label="安排范围"><button data-action="scope" data-scope="week" class="${state.scope==='week'?'active':''}">未来七天</button><button data-action="scope" data-scope="all" class="${state.scope==='all'?'active':''}">全部安排</button></div></div>`}${schedule}${state.calendarView==='month'?taskSection('时间待定',groups.unscheduled):''}</section>
     <aside class="right-stack"><section class="panel"><div class="panel-head"><h2>最近进展</h2>${icon('clock')}</div>${recent.length?`<div class="recent-list">${recent.map(e=>`<div class="recent-entry"><button data-action="detail" data-id="${escape(e.app.id)}">${escape(e.app.company)} · ${escape(e.app.role)}</button><p>${e.kind==='task'?'完成待办':escape(e.status)}</p><time>${prettyDate(e.occurred_on)}</time></div>`).join('')}</div>`:'<p class="mini-empty">添加进展后，这里会留下每一步的记录。</p>'}</section>
-    <section class="panel"><div class="panel-head"><h2>等一份回音</h2><small>14 天未更新</small></div>${waiting.length?`<div class="follow-list">${waiting.slice(0,5).map(a=>`<div class="follow-row"><button data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}<small>${escape(a.role)}</small></button><span class="follow-days">${Math.floor((Date.now()-new Date(a.updated_at))/86400000)} 天</span></div>`).join('')}</div>`:'<p class="mini-empty">暂时没有长时间未更新的投递。<br>收到回复，再记一笔。</p>'}</section><div class="note-block"><strong>${icon('leaf')}留一点空间给自己</strong>安排记在这里，精力留给准备。<br>完成一件，就轻轻划掉一件。</div></aside></div>`;
+    <section class="panel"><div class="panel-head"><h2>等一份回音</h2><small>14 天未更新</small></div>${waiting.length?`<div class="follow-list">${waiting.slice(0,5).map(a=>`<div class="follow-row"><button data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}<small>${escape(a.role)}</small></button><span class="follow-days">${Math.floor((Date.now()-new Date(a.updated_at))/86400000)} 天</span></div>`).join('')}</div>`:'<p class="mini-empty">暂时没有长时间未更新的投递。<br>收到回复，再记一笔。</p>'}</section><div class="note-block personal-note"><button class="icon-button note-edit" data-action="personalize" aria-label="编辑寄语与图标" title="编辑寄语与图标">${icon('edit')}</button><strong>${icon(personalization.values.icon)}${escape(personalization.values.title)}</strong><div class="personal-note-body">${escape(personalization.values.body)}</div></div></aside></div>`;
 }
 function taskSection(label,list,extra=''){return list.length?`<section class="task-group"><div class="group-label ${extra}">${label}<span class="count">${list.length}</span></div>${list.map(a=>`<div class="task-row"><button class="complete-button" data-action="complete" data-id="${escape(a.id)}" aria-label="完成：${escape(a.next_action)}" ${state.demo?'disabled':''}>${icon('check')}</button><button class="task-info" data-action="detail" data-id="${escape(a.id)}"><strong>${escape(a.next_action)}</strong><small>${escape(a.company)} · ${escape(a.role)}</small></button><div class="task-meta"><time class="task-time ${isLate(a)?'late':''}">${timeLabel(a)}</time>${badge(a.status)}</div><button class="icon-button task-edit" data-action="event" data-id="${escape(a.id)}" aria-label="更新${escape(a.company)}的进展">${icon('chevron')}</button></div>`).join('')}</section>`:'';}
 function applications(){
@@ -156,7 +161,7 @@ function applications(){
     ${classificationFilters()}${filtered.length?`<div class="table-scroll"><table><thead><tr><th scope="col">公司 / 岗位</th><th scope="col">当前阶段</th><th scope="col">城市</th><th scope="col">投递入口</th><th scope="col">下一步</th><th scope="col">投递日期</th><th scope="col">操作</th></tr></thead><tbody>${filtered.map(a=>`<tr data-application-id="${escape(a.id)}" class="${state.createdId===a.id?'is-new-record':''}"><td class="identity-cell"><div class="company-cell">${logo(a)}<div><button class="company-name" data-action="detail" data-id="${escape(a.id)}">${escape(a.company)}</button>${state.createdId===a.id?'<span class="new-record-label">刚刚新增</span>':''}<small>${escape(a.role)}</small>${companyTags(a)}</div></div></td><td class="stage-cell"><select class="badge status-select ${tone(a.status)}" data-status-id="${escape(a.id)}" aria-label="${escape(a.company)} ${escape(a.role)}的当前阶段" ${state.demo?'disabled':''}>${options(STATUSES,a.status)}</select></td><td class="cell-muted city-cell" data-label="城市">${escape(a.city)||'未填写'}</td><td class="link-cell" data-label="投递入口">${applicationLink(a)}</td><td class="table-next" data-label="下一步">${a.next_action?`<strong>${escape(a.next_action)}</strong><small class="${isLate(a)?'overdue':''}">${prettyDate(a.due_at,true)}</small>`:`<button class="text-button" data-action="event" data-id="${escape(a.id)}">${state.demo?'查看进展':'+ 添加下一步'}</button>`}</td><td class="cell-muted applied-cell" data-label="投递日期">${escape(a.applied_on).replaceAll('-','/')}</td><td class="actions-cell"><div class="row-actions"><button class="icon-button priority-button ${a.priority==='重点关注'?'starred':''}" data-action="star" data-id="${escape(a.id)}" aria-label="${a.priority==='重点关注'?'取消重点关注':'重点关注'}${escape(a.company)}" aria-pressed="${a.priority==='重点关注'}" ${state.demo?'disabled':''}>${icon('star')}</button><button class="icon-button" data-action="detail" data-id="${escape(a.id)}" aria-label="查看${escape(a.company)} ${escape(a.role)}">${icon('chevron')}</button></div></td></tr>`).join('')}</tbody></table></div>`:apps().length?empty('没有找到符合条件的投递','试试其他关键词，或者清除筛选条件。','<button class="button" data-action="reset-filters">清除筛选</button>','search'):empty('第一份投递，从这里记起','只需公司和岗位，其他信息可以之后补充。','<button class="button primary" data-action="new">'+icon('plus')+'新增投递</button>')}
     <div class="table-footer"><span>显示 ${filtered.length} / ${apps().length} 份投递</span><span>点击公司查看详情 · 修改阶段会自动记入时间线</span></div></section>`;
 }
-function backup(){return heading('数据备份','你的记录，由你保管。随时导出，安心保存。')+`<div class="backup-grid"><section class="panel backup-card">${icon('download')}<h2>导出我的记录</h2><p>完整备份包含岗位信息和所有进展；表格适合查看、整理，或分享给别人。</p><button class="button primary" data-action="export-json">${icon('download')}完整备份 JSON</button><button class="button" data-action="export-csv">导出表格 CSV</button><p class="field-hint">当前有 ${state.apps.length} 份真实投递记录。CSV 不包含完整时间线。</p></section><section class="panel backup-card">${icon('upload')}<h2>从备份恢复</h2><p>选择本工作台导出的 JSON 文件。只补充缺少的投递；已有编号或相同公司、岗位的记录会跳过。</p><button class="button" data-action="import">${icon('upload')}选择备份文件</button><p class="field-hint">导入前会自动备份当前数据。</p></section></div><section class="storage-info"><h2>本地保存，随时带走</h2><div class="info-line">${icon('harddrive')}<div><p>记录保存在应用文件夹里的 <code>data/workbench.sqlite3</code>。关闭页面后数据仍然保留。</p></div></div><div class="info-line">${icon('shield')}<div><p>每天首次启动时生成一次快照；导入和删除前也会备份，存放在 <code>data/backups/</code>。</p><p>建议偶尔下载完整备份，另外存一份。更换电脑时，可在新的工作台里导入。</p></div></div><div class="info-line">${icon('clock')}<div><p>当前版本的安排展示在页面内。关闭工作台后，不会发送系统通知。</p></div></div></section>`;}
+function backup(){return heading('数据备份','你的记录，由你保管。随时导出，安心保存。')+`<div class="backup-grid"><section class="panel backup-card">${icon('download')}<h2>导出我的记录</h2><p>完整备份包含岗位信息和所有进展；表格适合查看、整理，或分享给别人。</p><button class="button primary" data-action="export-json">${icon('download')}完整备份 JSON</button><button class="button" data-action="export-csv">导出表格 CSV</button><p class="field-hint">当前有 ${state.apps.length} 份真实投递记录。CSV 不包含完整时间线。</p></section><section class="panel backup-card">${icon('upload')}<h2>从备份恢复</h2><p>选择本工作台导出的 JSON 文件。只补充缺少的投递；已有编号或相同公司、岗位的记录会跳过；个性化设置仅在本机尚未设置时恢复。</p><button class="button" data-action="import">${icon('upload')}选择备份文件</button><p class="field-hint">导入前会自动备份当前数据。</p></section></div><section class="storage-info"><h2>本地保存，随时带走</h2><div class="info-line">${icon('harddrive')}<div><p>记录保存在应用文件夹里的 <code>data/workbench.sqlite3</code>。关闭页面后数据仍然保留。</p></div></div><div class="info-line">${icon('shield')}<div><p>每天首次启动时生成一次快照；导入和删除前也会备份，存放在 <code>data/backups/</code>。</p><p>建议偶尔下载完整备份，另外存一份。更换电脑时，可在新的工作台里导入。</p></div></div><div class="info-line">${icon('clock')}<div><p>当前版本的安排展示在页面内。关闭工作台后，不会发送系统通知。</p></div></div></section>`;}
 function applicationLink(app, detail=false){
   if(!app.url){
     if(state.demo)return '<span class="cell-muted">未附链接</span>';
@@ -285,6 +290,9 @@ document.addEventListener('click',async event=>{
   const {action,id}=button.dataset;
   if(action==='recognize-url'||action==='recognize-text')return recognizeInput(action==='recognize-url'?'url':'text');
   if(action==='apply-recognition')return applyRecognition();
+  if(action==='personalize')return openPersonalization();
+  if(action==='close-personalization')return closePersonalization();
+  if(action==='reset-personalization'){fillPersonalization(personalization.defaults);notify('已恢复默认，保存后生效');return;}
   if(action==='new')return openEditor('new');
   if(action==='detail')return openDetail(id);
   if(action==='event'||action==='edit')return openEditor(action,id);
@@ -360,6 +368,40 @@ $('#drawer').addEventListener('click',event=>{if(event.target===$('#drawer')){co
 $('#editor').addEventListener('click',event=>{if(event.target===$('#editor')){const box=event.target.getBoundingClientRect();if(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom)closeEditor();}});
 window.addEventListener('beforeunload',event=>{if($('#editor').open&&JSON.stringify([...new FormData($('#recordForm'))])!==formSnapshot){event.preventDefault();event.returnValue='';}});
 window.addEventListener('hashchange',()=>{const route=location.hash.slice(1);if(routeNames[route])navigate(route);});
+function personalValues(){return Object.fromEntries(new FormData($('#personalizationForm')));}
+function personalPreview(){
+  const values=personalValues();
+  $('#personalPreview').innerHTML=`<div class="personal-preview-tagline">${escape(values.tagline)}</div><div class="note-block"><strong>${icon(values.icon)}${escape(values.title)}</strong><div class="personal-note-body">${escape(values.body)}</div></div>`;
+}
+function fillPersonalization(values){
+  const form=$('#personalizationForm');
+  for(const key of ['tagline','title','body','icon'])form.elements[key].value=values[key];
+  personalPreview();
+}
+function openPersonalization(){
+  const dialog=$('#personalizationDialog'),values=personalization.values;
+  dialog.dataset.saving='false';
+  dialog.innerHTML=`<form id="personalizationForm"><div class="dialog-heading"><div><h2 id="personalizationTitle">让工作台像你一点</h2><p>写给自己的话，按喜欢的样子来。</p></div><button type="button" class="icon-button" data-action="close-personalization" aria-label="关闭个性化设置">${icon('close')}</button></div><div class="form-content"><div id="personalPreview" class="personal-preview" aria-label="寄语预览"></div><div class="form-grid"><div class="field full"><label for="personalTagline">首页寄语</label><input id="personalTagline" name="tagline" maxlength="80" required><small class="muted">没有今日或逾期待办时显示，重要安排仍会优先提醒。</small></div><div class="field full"><label for="personalTitle">寄语标题</label><input id="personalTitle" name="title" maxlength="40" required></div><div class="field full"><label for="personalBody">寄语正文</label><textarea id="personalBody" name="body" maxlength="300" rows="3" required></textarea></div><fieldset class="personal-icons field full"><legend>选择图标</legend><div>${Object.entries(personalization.icons).map(([key,name])=>`<label title="${escape(name)}"><input type="radio" name="icon" value="${escape(key)}" ${key===values.icon?'checked':''} required><span>${icon(key)}<small>${escape(name)}</small></span></label>`).join('')}</div></fieldset></div><p id="personalError" class="form-error" role="alert" hidden></p></div><div class="dialog-footer"><button type="button" class="text-button" data-action="reset-personalization">恢复默认</button><div class="actions"><button type="button" class="button" data-action="close-personalization">取消</button><button type="submit" class="button primary">保存设置</button></div></div></form>`;
+  fillPersonalization(values);personalSnapshot=JSON.stringify(personalValues());dialog.showModal();
+}
+async function closePersonalization(){
+  const dialog=$('#personalizationDialog');if(dialog.dataset.saving==='true')return;
+  if(JSON.stringify(personalValues())!==personalSnapshot&&!await confirmBox('放弃未保存的设置？','这些修改还没有保存。','放弃修改'))return;
+  dialog.close();
+}
+$('#personalizationDialog').addEventListener('cancel',event=>{event.preventDefault();closePersonalization();});
+document.addEventListener('input',event=>{if(event.target.form?.id==='personalizationForm')personalPreview();});
+document.addEventListener('submit',async event=>{
+  if(event.target.id!=='personalizationForm')return;
+  event.preventDefault();const dialog=$('#personalizationDialog');if(dialog.dataset.saving==='true')return;
+  const form=event.target,values=personalValues(),error=$('#personalError');
+  error.hidden=true;dialog.dataset.saving='true';
+  const controls=[...form.querySelectorAll('button,input,textarea')];controls.forEach(el=>el.disabled=true);
+  try{personalization.values=await request('/api/personalization','PATCH',values);dialog.close();render();notify('个性化设置已保存');}
+  catch(err){error.textContent=err.message;error.hidden=false;}
+  finally{dialog.dataset.saving='false';controls.forEach(el=>el.disabled=false);}
+});
+window.addEventListener('beforeunload',event=>{if($('#personalizationDialog').open&&JSON.stringify(personalValues())!==personalSnapshot){event.preventDefault();event.returnValue='';}});
 function makeDemo(){
   const today=dayKey();
   const fixtures=[

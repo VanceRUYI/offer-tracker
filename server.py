@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
-from store import Store, ValidationError
+from store import Store, ValidationError, PERSONALIZATION_DEFAULTS, PERSONALIZATION_ICONS
 from recognition import recognize
 
 ROOT = Path(__file__).resolve().parent
@@ -58,6 +58,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == 'GET':
             if path == '/api/health':
                 return self.reply(200, {'app': 'autumn-workbench', 'version': 1})
+            if path == '/api/personalization':
+                return self.reply(200, {'values': store.personalization(), 'defaults': PERSONALIZATION_DEFAULTS, 'icons': PERSONALIZATION_ICONS})
             if path == '/api/applications':
                 return self.reply(200, store.list())
             if path == '/api/export.json':
@@ -98,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValidationError('内容不是有效的 JSON')
         else:
             data = {}
+        if self.command == 'PATCH' and path == '/api/personalization':
+            return self.reply(200, store.set_personalization(data))
         if self.command == 'POST' and path == '/api/applications':
             return self.reply(201, store.create(data))
         if self.command == 'POST' and path == '/api/recognize':
