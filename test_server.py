@@ -54,7 +54,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(self.request('GET', '/api/applications')[1]), [])
 
     def test_repeat_requires_confirmation_and_exports_batch(self):
-        data = {'company':'Acme', 'role':'算法', 'batch':'提前批'}
+        data = {'company':'Acme', 'role':'算法', 'batch':'提前批', 'job_code':'001-AI'}
         first = json.loads(self.request('POST', '/api/applications', data)[1])
         status, body = self.request('POST', '/api/applications', {**data, 'company':'ACME'})
         self.assertEqual(status, 409)
@@ -68,6 +68,8 @@ class HTTPTests(unittest.TestCase):
         rows = list(csv.reader(io.StringIO(self.request('GET', '/api/export.csv')[1].decode('utf-8-sig'))))
         self.assertEqual(rows[0][2], '批次')
         self.assertEqual(rows[1][2], '正式批')
+        self.assertEqual(rows[0][3], '岗位编号')
+        self.assertEqual(rows[1][3], '001-AI')
 
     def test_personalization_roundtrip_and_validation(self):
         status, body = self.request('GET', '/api/personalization')

@@ -71,6 +71,24 @@ class StoreTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 self.create(**changes)
 
+    def test_job_code_roundtrip_edit_and_old_record_default(self):
+        app = self.create(job_code='  001-AI-26  ')
+        self.assertEqual(app.get('job_code'), '001-AI-26')
+        self.store.update(app['id'], {'note':'其他修改'})
+        self.assertEqual(Store(self.path).get(app['id'])['job_code'], '001-AI-26')
+        restored = Store(Path(self.temp.name) / 'code-restore.sqlite3')
+        restored.import_data(self.store.export())
+        self.assertEqual(restored.get(app['id'])['job_code'], '001-AI-26')
+        self.assertEqual(self.store.update(app['id'], {'job_code':''})['job_code'], '')
+        with self.store.connect() as con:
+            payload = json.loads(con.execute('SELECT payload FROM applications WHERE id=?', (app['id'],)).fetchone()[0])
+            payload.pop('job_code')
+            con.execute('UPDATE applications SET payload=? WHERE id=?', (json.dumps(payload), app['id']))
+        self.assertEqual(self.store.get(app['id'])['job_code'], '')
+        for value in (123, None, 'x'*101):
+            with self.assertRaises(ValidationError):
+                self.store.update(app['id'], {'job_code':value})
+
     def test_persist_and_keep_different_roles_separate(self):
         first = self.create()
         self.create(role='后端工程师')

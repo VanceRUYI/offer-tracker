@@ -129,3 +129,9 @@ test('company suggestions prefer exact match and attempt labels distinguish repe
   assert.equal(attemptLabel(rows[2],rows),'后端');
   assert.deepEqual(filterApps(rows,{query:'提前批'}).map(a=>a.id),['a']);
 });
+
+test('search matches job codes while old records need no code', () => {
+  const records=[{id:'a',company:'Acme',role:'AI',job_code:'001-AI-26'},{id:'b',company:'Acme',role:'后端'}];
+  assert.deepEqual(filterApps(records,{query:'001-ai'}).map(a=>a.id),['a']);
+  assert.equal(filterApps(records).length,2);
+});

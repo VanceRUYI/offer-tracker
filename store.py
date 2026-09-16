@@ -12,7 +12,7 @@ STATUSES = ['待投递', '已投递', '筛选中', '测评', '笔试', '一面',
 TERMINAL = {'已结束'}
 COMPANY_TYPES = ['央企', '国企', '民企', '外企', '合资企业', '事业单位', '其他']
 INDUSTRIES = ['互联网', '人工智能', '金融', '制造业', '能源', '通信', '医疗健康', '教育科研', '消费零售', '其他']
-FIELDS = ('company', 'role', 'status', 'priority', 'applied_on', 'city', 'channel', 'url', 'resume', 'note', 'next_action', 'due_at', 'company_type', 'industry', 'batch')
+FIELDS = ('company', 'role', 'status', 'priority', 'applied_on', 'city', 'channel', 'url', 'resume', 'note', 'next_action', 'due_at', 'company_type', 'industry', 'batch', 'job_code')
 
 PERSONALIZATION_DEFAULTS = {
     'tagline': '今天也按自己的节奏来',
@@ -95,6 +95,7 @@ def normalize(data, base=None):
     if len(result['company']) > 160 or len(result['role']) > 200:
         raise ValidationError('公司或岗位名称过长')
     result['batch'] = text(result['batch'], '批次', 80)
+    result['job_code'] = text(result['job_code'], '岗位编号', 100)
     if result['status'] not in STATUSES:
         raise ValidationError('请选择有效阶段')
     if result['priority'] not in ('普通', '重点关注'):
@@ -197,6 +198,7 @@ class Store:
         app.setdefault('company_type', '')
         app.setdefault('industry', '')
         app.setdefault('batch', '')
+        app.setdefault('job_code', '')
         app['events'] = [json.loads(r[0]) for r in con.execute('SELECT payload FROM events WHERE application_id=? ORDER BY rowid', (app_id,))]
         return app
 

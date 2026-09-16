@@ -799,3 +799,4 @@ select[hidden] { display:none!important; }
   .company-group .table-scroll { padding-top:4px; }
   .company-add { padding:7px 9px; font-size:11px; }
 }
+.repeat-notice[hidden], .company-suggestions[hidden] { display:none; }

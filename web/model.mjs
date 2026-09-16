@@ -47,7 +47,7 @@ export function taskGroups(apps, now = new Date()) {
 export function filterApps(apps, {query='',status='',priority=false,sort='newest',company_type='',industry=''}={}) {
   const q=query.trim().toLocaleLowerCase();
   const matches=(value,filter)=>!filter || (filter==='未填写' ? !value : value===filter);
-  const list=apps.filter(a=>(!q || [a.company,a.role,a.batch,a.city,a.note,a.next_action,a.channel,a.resume,a.company_type,a.industry].join(' ').toLocaleLowerCase().includes(q)) && (!status || (status==='进行中' ? !['待投递','已结束','Offer'].includes(a.status) : a.status===status)) && (!priority || a.priority==='重点关注') && (company_type==='央国企' ? ['央企','国企'].includes(a.company_type) : matches(a.company_type,company_type)) && matches(a.industry,industry));
+  const list=apps.filter(a=>(!q || [a.company,a.role,a.batch,a.job_code,a.city,a.note,a.next_action,a.channel,a.resume,a.company_type,a.industry].join(' ').toLocaleLowerCase().includes(q)) && (!status || (status==='进行中' ? !['待投递','已结束','Offer'].includes(a.status) : a.status===status)) && (!priority || a.priority==='重点关注') && (company_type==='央国企' ? ['央企','国企'].includes(a.company_type) : matches(a.company_type,company_type)) && matches(a.industry,industry));
   return list.sort((a,b)=>{
     if(sort==='company') return a.company.localeCompare(b.company,'zh-CN');
     if(sort==='due') return (a.due_at||'9999').localeCompare(b.due_at||'9999');
