@@ -11,6 +11,43 @@ from store import Store
 
 
 class HTTPTests(unittest.TestCase):
+    def test_recognized_icon_can_be_fetched_later_without_reloading_job_page(self):
+        from unittest.mock import patch
+        from test_company_logos import PNG
+        from recognition import RecognitionError
+        def image_only(url, **kwargs):
+            if url!='https://example.com/favicon.ico' or not kwargs.get('image'):
+                raise RecognitionError('unexpected HTML fetch')
+            return PNG, url
+        with patch('recognition.fetch_public_page', side_effect=image_only):
+            status, body=self.request('POST','/api/company-logo/discover',{
+                'company':'测试公司','website':'https://example.com/job/123',
+                'icon_url':'https://example.com/favicon.ico','automatic':True})
+        self.assertEqual(status,200)
+        self.assertTrue(json.loads(body)['data_url'].startswith('data:image/png;'))
+        self.assertEqual(self.store.company_logos(),{})
+
+    def test_streamed_ready_fields_return_without_waiting_for_model(self):
+        from unittest.mock import patch
+        html = '<p>公司：测试公司</p><p>岗位：算法工程师</p>'
+        with patch('recognition.fetch_public_page', return_value=(html,'https://example.com/job')), \
+             patch('glm_recognition.load_key', return_value='private-test-key'), \
+             patch('glm_recognition.extract_fields', side_effect=AssertionError('ready fields must not wait for model')):
+            status, body = self.request('POST','/api/recognize-stream',{'url':'https://example.com/job'})
+        self.assertEqual(status, 200)
+        events = [json.loads(line) for line in body.splitlines()]
+        self.assertEqual([e['stage'] for e in events if e['type']=='progress'], ['reading'])
+        self.assertEqual(events[-1]['result']['ai_status'], 'not_needed')
+        self.assertEqual(events[-1]['result']['fields'], {'company':'测试公司','role':'算法工程师'})
+        self.assertNotIn(b'private-test-key', body)
+        self.assertEqual(self.store.list(), [])
+
+    def test_streamed_invalid_url_is_terminal_error_and_checks_origin(self):
+        status, body = self.request('POST','/api/recognize-stream',{'url':'http://127.0.0.1/'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['type'], 'error')
+        self.assertEqual(self.request('POST','/api/recognize-stream',{}, {'Origin':'https://example.com'})[0], 403)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.store = Store(Path(self.temp.name) / 'db.sqlite3')
@@ -37,6 +74,44 @@ class HTTPTests(unittest.TestCase):
             return response.status, response.read()
         finally:
             con.close()
+
+    def test_company_logo_routes_and_asset(self):
+        from test_company_logos import PNG
+        from company_logos import image_data
+        from unittest.mock import patch
+        logo = {'data_url':image_data(PNG), 'website':'https://example.com/', 'source_url':''}
+        self.assertEqual(self.request('GET', '/logos.mjs')[0], 200)
+        self.assertEqual(self.request('POST','/api/company-logo',{'company':'测试','logo':logo})[0],200)
+        payload = json.loads(self.request('GET','/api/company-logos')[1])
+        self.assertEqual(payload['logos']['测试'],logo)
+        with patch('server.discover_logo', return_value=logo):
+            self.assertEqual(self.request('POST','/api/company-logo/discover',{'company':'测试'})[0],200)
+        self.assertEqual(self.request('POST','/api/company-logo',{'company':'测试','logo':{'data_url':'javascript:bad'}})[0],400)
+
+    def test_automatic_logo_api_uses_job_link_and_rejects_platform_branding(self):
+        from test_company_logos import PNG
+        from unittest.mock import patch
+        payload={'company':'测试科技','website':'https://example.com/jobs/123','automatic':True}
+        page='<title>算法工程师 - 测试科技校园招聘官网</title><link rel="icon" href="/logo.png">'
+        with patch('recognition.fetch_public_page',side_effect=[(page,payload['website']),(PNG,'https://example.com/logo.png')]):
+            status,body=self.request('POST','/api/company-logo/discover',payload)
+            self.assertEqual(status,200)
+            self.assertEqual(json.loads(body)['source_url'],'https://example.com/logo.png')
+        payload['website']='https://tenant.feishu.cn/jobs/123'
+        self.assertEqual(self.request('POST','/api/company-logo/discover',payload)[0],400)
+        self.assertEqual(self.store.company_logos(),{})
+
+    def test_complete_and_reopen_task_api(self):
+        app = self.store.create({'company':'完成事项测试','role':'算法岗','next_action':'笔试','due_at':'2026-09-18T14:00'})
+        path = '/api/applications/' + app['id']
+        status, body = self.request('POST', path + '/complete', {})
+        self.assertEqual(status, 200)
+        event = json.loads(body)['events'][-1]
+        self.assertEqual(event['task_title'], '笔试')
+        status, body = self.request('POST', path + '/reopen-task', {'event_id':event['id']})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['next_action'], '笔试')
+        self.assertEqual(self.request('POST', path + '/reopen-task', {'event_id':'missing'})[0], 400)
 
     def test_full_application_flow_and_csv_formula_escaping(self):
         status, body = self.request('POST', '/api/applications', {'company': '=1+1', 'role': '算法岗', 'company_type':'央企', 'industry':'制造业'})

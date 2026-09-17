@@ -1,11 +1,41 @@
 import json
+import io
+import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
-from recognition import extract_page, extract_text, validate_public_url, RecognitionError, public_dns_addresses, proxy_tls_connection
+from recognition import extract_page, extract_text, validate_public_url, RecognitionError, public_dns_addresses, proxy_tls_connection, resolve_through_proxy
 
 
 class RecognitionTests(unittest.TestCase):
+    def resolve_fixture(self, answers):
+        class Socket:
+            def settimeout(self, value): pass
+        class Response(io.BytesIO):
+            status = 200
+        class Connection:
+            sock = Socket()
+            def __init__(self, payload): self.payload = payload
+            def request(self, *args, **kwargs): pass
+            def getresponse(self): return Response(json.dumps(self.payload).encode())
+            def close(self): pass
+        def connect(proxy, address, port, hostname, timeout):
+            answer = answers[hostname]
+            if isinstance(answer, Exception): raise answer
+            return Connection({'Status': 0, 'Answer': [{'type': 1, 'data': answer}]})
+        with patch('recognition.proxy_tls_connection', side_effect=connect):
+            return resolve_through_proxy(urlsplit('http://localhost:7890'), 'jobs.example.com', time.monotonic()+5)
+
+    def test_fake_dns_prefers_regional_cdn_answer_for_first_read(self):
+        self.assertEqual(self.resolve_fixture({'dns.alidns.com': '8.8.4.4', 'dns.google': '8.8.8.8'}), '8.8.4.4')
+
+    def test_fake_dns_uses_backup_when_primary_is_unreachable(self):
+        self.assertEqual(self.resolve_fixture({'dns.alidns.com': TimeoutError(), 'dns.google': '8.8.8.8'}), '8.8.8.8')
+
+    def test_fake_dns_does_not_accept_private_primary_answer(self):
+        with self.assertRaises(RecognitionError):
+            self.resolve_fixture({'dns.alidns.com': '127.0.0.1', 'dns.google': '8.8.8.8'})
+
     def test_company_nature_and_industry_are_separate_explicit_candidates(self):
         result = extract_text('公司：示例科技\n企业性质：民营企业\n所属行业：互联网/电子商务\n岗位：算法工程师')
         self.assertEqual(result['fields'].get('company_type'), '民企')

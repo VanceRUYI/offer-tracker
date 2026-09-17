@@ -7,6 +7,7 @@ import re
 import socket
 import ssl
 import time
+import zlib
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit, unquote
@@ -84,17 +85,33 @@ def public_dns_addresses(payload):
 def resolve_through_proxy(proxy, host, deadline):
     # Fake DNS cannot establish a public destination. Resolve independently over
     # authenticated DoH, then pin the subsequent tunnel to the returned public IP.
+    # Prefer a regional resolver for Chinese recruitment sites: the previous
+    # Google-only lookup selected distant CDN nodes even on the very first read.
+    # Keep the system resolver path untouched when it already returns public IPs.
+    providers = [('223.5.5.5', 'dns.alidns.com', 2), ('8.8.8.8', 'dns.google', 4)]
+    for address, hostname, budget in providers:
+        try:
+            return query_public_dns(proxy, host, min(deadline, time.monotonic()+budget), address, hostname)
+        except RecognitionError:
+            raise  # Invalid/private answers remain a hard failure.
+        except (OSError, ValueError, http.client.HTTPException):
+            if time.monotonic() >= deadline:
+                break
+    raise RecognitionError('无法解析岗位网站，请稍后重试')
+
+
+def query_public_dns(proxy, host, deadline, address, hostname):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError()
-    con = proxy_tls_connection(proxy, '8.8.8.8', 443, 'dns.google', min(8, remaining))
+    con = proxy_tls_connection(proxy, address, 443, hostname, remaining)
     sock = con.sock
     try:
         con.request('GET', '/resolve?name=' + quote(host, safe='') + '&type=A&edns_client_subnet=0.0.0.0/0',
-                    headers={'Host':'dns.google', 'Accept':'application/dns-json'})
+                    headers={'Host':hostname, 'Accept':'application/dns-json'})
         response = con.getresponse()
         if response.status != 200:
-            raise RecognitionError('无法解析岗位网站，请复制页面文字识别')
+            raise OSError('Public DNS service unavailable')
         content = bytearray()
         while True:
             remaining = deadline - time.monotonic()
@@ -112,8 +129,13 @@ def resolve_through_proxy(proxy, host, deadline):
         con.close()
 
 
-def fetch_public_page(url):
-    deadline = time.monotonic() + 20
+def fetch_public_page(url, *, image=False, head_only=False, resource=False,
+                      method='GET', body=None, headers=None, deadline=None, address_cache=None,
+                      browser_session=False, response_metadata=None):
+    deadline = deadline or time.monotonic() + 20
+    limit = 8 * 1024 * 1024 if resource else 512 * 1024 if image else MAX_PAGE
+    if method not in ('GET', 'POST', 'HEAD', 'OPTIONS') or (body and len(body) > 128*1024):
+        raise RecognitionError('页面请求超出读取范围')
     for _ in range(5):
         normalized, host, port = validate_public_url(url)
         try:
@@ -131,7 +153,11 @@ def fetch_public_page(url):
                 raise TimeoutError()
             # Connect to the address just checked, preventing DNS rebinding between checks and use.
             if use_proxy:
-                address = resolve_through_proxy(proxy, host, deadline)
+                cache_key=(host,port)
+                address = (address_cache or {}).get(cache_key)
+                if not address:
+                    address = resolve_through_proxy(proxy, host, deadline)
+                    if address_cache is not None:address_cache[cache_key]=address
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError()
@@ -150,33 +176,64 @@ def fetch_public_page(url):
                 con.sock = sock
                 parsed = urlsplit(normalized)
                 path = parsed.path + ('?' + parsed.query if parsed.query else '')
-                con.request('GET', path, headers={'Host':parsed.netloc, 'User-Agent':'AutumnWorkbench/1.0 (personal job link preview)', 'Accept':'text/html,application/xhtml+xml', 'Accept-Encoding':'identity'})
+                request_headers={'host':parsed.netloc, 'user-agent':'AutumnWorkbench/1.0 (personal job link preview)', 'accept':'image/png,image/x-icon,image/jpeg,image/webp' if image else 'text/html,application/xhtml+xml', 'accept-encoding':'gzip, deflate'}
+                if resource:
+                    request_headers.update({k.lower():v for k,v in (headers or {}).items()
+                        if k.lower() in ('accept','content-type','origin','referer','user-agent') or k.lower().startswith('x-')})
+                    if browser_session and (headers or {}).get('cookie'):
+                        request_headers['cookie'] = headers['cookie']
+                con.request(method, path, body=body, headers=request_headers)
                 response = con.getresponse()
-                if response.status in (301, 302, 303, 307, 308):
+                if not resource and response.status in (301, 302, 303, 307, 308):
                     location = response.getheader('Location')
                     if not location:
                         raise RecognitionError('网页跳转不完整，请粘贴最终的岗位页面网址')
                     url = urljoin(normalized, location)
                     continue
-                if response.status != 200:
+                if not resource and response.status != 200:
                     raise RecognitionError('网页无法直接读取（可能需要登录或限制访问）。可在下面粘贴页面或通知文字继续识别。')
                 content_type = response.getheader('Content-Type', '')
-                if content_type and not any(t in content_type.lower() for t in ('text/html', 'application/xhtml+xml', 'text/plain')):
+                if not resource and not image and content_type and not any(t in content_type.lower() for t in ('text/html', 'application/xhtml+xml', 'text/plain')):
                     raise RecognitionError('这不是可识别的文字网页，请打开岗位页面后复制文字')
-                if response.getheader('Content-Encoding', 'identity') != 'identity':
+                compression = response.getheader('Content-Encoding', 'identity').strip().lower()
+                if compression not in ('identity', 'gzip', 'deflate'):
                     raise RecognitionError('网页使用了不支持的压缩方式，请复制页面文字识别')
+                decoder = zlib.decompressobj(31 if compression == 'gzip' else 15) if compression != 'identity' else None
                 content = bytearray()
+                transferred = 0
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError()
                     sock.settimeout(min(8, remaining))
-                    chunk = response.read1(min(65536, MAX_PAGE + 1 - len(content)))
+                    chunk = response.read1(min(65536, limit + 1 - len(content)))
                     if not chunk:
+                        if decoder and not decoder.eof:
+                            raise RecognitionError('网页压缩内容不完整，请重试')
                         break
-                    content.extend(chunk)
-                    if len(content) > MAX_PAGE:
+                    transferred += len(chunk)
+                    if transferred > limit:
                         raise RecognitionError('网页内容过大，请复制岗位或通知文字识别')
+                    if decoder:
+                        chunk = decoder.decompress(chunk, limit + 1 - len(content))
+                    content.extend(chunk)
+                    if len(content) > limit:
+                        raise RecognitionError('网页内容过大，请复制岗位或通知文字识别')
+                    if head_only and not image and (b'</head>' in content.lower() or len(content)>=256*1024):
+                        break
+                    if len(content) > limit:
+                        raise RecognitionError('网页内容过大，请复制岗位或通知文字识别')
+                if resource:
+                    response_headers={k.lower():v for k,v in response.getheaders() if k.lower() not in
+                        ('set-cookie','content-length','content-encoding','transfer-encoding','connection')}
+                    if browser_session and response.headers.get_all('Set-Cookie'):
+                        response_headers['set-cookie']='\n'.join(response.headers.get_all('Set-Cookie'))
+                    return {'body':bytes(content), 'status':response.status, 'url':normalized,
+                            'headers':response_headers}
+                if image:
+                    return bytes(content), normalized
+                if response_metadata is not None:
+                    response_metadata['set_cookie']='\n'.join(response.headers.get_all('Set-Cookie') or [])
                 charset = re.search(r'charset\s*=\s*["\']?([\w-]+)', content_type, re.I)
                 if not charset:
                     charset = re.search(r'charset\s*=\s*["\']?([\w-]+)', bytes(content[:4096]).decode('ascii', errors='ignore'), re.I)
@@ -190,7 +247,7 @@ def fetch_public_page(url):
                 con.close()
         except RecognitionError:
             raise
-        except (OSError, ValueError, http.client.HTTPException):
+        except (OSError, ValueError, zlib.error, http.client.HTTPException):
             raise RecognitionError('暂时无法读取这个网址。请检查网络，或粘贴已打开页面中的岗位、投递通知文字。')
     raise RecognitionError('网页跳转次数过多，请使用浏览器最终打开的岗位网址')
 
@@ -410,10 +467,104 @@ def extract_page(html, url):
     return result
 
 
-def recognize(data):
+def title_job_code(role):
+    """A conservative code candidate from the current role, not arbitrary page IDs."""
+    code = re.search(r'[（(]\s*([A-Za-z]{1,8}[-_]?\d{4,16})\s*[）)]\s*$', role)
+    return code.group(1) if code else ''
+
+
+def recognize(data, progress=None, *, use_ai=False):
     if not isinstance(data, dict):
         raise RecognitionError('识别内容格式不正确')
     if data.get('text'):
         return extract_text(data['text'])
-    html, url = fetch_public_page(data.get('url', ''))
-    return extract_page(html, url)
+    url, _, _ = validate_public_url(data.get('url', ''))
+    started = time.monotonic()
+    emit = progress or (lambda event: None)
+    emit({'stage':'reading', 'message':'正在读取岗位页面…'})
+    from job_sources import SOURCES
+    from rendered_extraction import extract_rendered_page
+    page = SOURCES.read(url)
+    if page:
+        result = extract_rendered_page(page)
+        result['read_method'] = 'api'
+    else:
+        result = {'fields':{}, 'evidence':{}, 'facts':[], 'source_url':url}
+        page = {'title':'', 'text':''}
+        initial_document = None
+        final = url
+        try:
+            metadata = {}
+            html, final = fetch_public_page(url, response_metadata=metadata)
+            initial_document = {'html':html, 'set_cookie':metadata.get('set_cookie','')}
+            result = extract_page(html, final)
+            parser = PageParser(); parser.feed(html)
+            page = {'title':''.join(parser.title), 'text':' '.join(parser.parts)}
+        except RecognitionError:
+            pass
+        if all(result['fields'].get(key) for key in ('company','role')):
+            result['read_method'] = 'html'
+        else:
+            from browser_reader import read_rendered_page
+            from rendered_extraction import extract_rendered_page
+            emit({'stage':'browser', 'message':'正在加载动态岗位页面…'})
+            try:
+                page = read_rendered_page(final, initial_document=initial_document)
+                rendered = extract_rendered_page(page)
+                SOURCES.learn(page)
+                for key, value in result['fields'].items():
+                    if key not in rendered['fields']:
+                        rendered['fields'][key] = value
+                        rendered['evidence'][key] = result['evidence'][key]
+                result = rendered
+                result['read_method'] = 'browser'
+            except RecognitionError as error:
+                result['facts'].append({'label':'页面读取未完成','value':str(error)})
+                result['read_method'] = 'partial'
+    reading_seconds = round(time.monotonic() - started, 1)
+    if use_ai:
+        from glm_recognition import load_key, extract_fields, ModelError, MODEL, LIMITS
+        # Company and role are the form's required fields. Do not hold a usable
+        # preview behind an optional model call just to fill city/code/batch.
+        skip_model = all(result['fields'].get(k) for k in ('company','role'))
+        key = None if skip_model else load_key()
+        result['ai_status'] = 'unconfigured' if not key else 'skipped'
+        if skip_model:
+            result['ai_status'] = 'not_needed'
+        elif key and (page.get('text','').strip() or result['fields']):
+            emit({'stage':'model', 'message':'免费 GLM 正在提取岗位信息…', 'reading_seconds':reading_seconds})
+            model_started = time.monotonic()
+            try:
+                fields = extract_fields(page, result, key)
+                for field in LIMITS:
+                    result['fields'].pop(field, None)
+                    result['evidence'].pop(field, None)
+                result['fields'].update(fields)
+                result['evidence'].update({field:'GLM 提取，已检查文字依据，请核对：'+value for field,value in fields.items()})
+                if fields.get('role'):
+                    result['facts'] = [fact for fact in result['facts'] if fact['label'] != '已读取页面']
+                result['ai_status'] = 'success'
+                result['ai_model'] = MODEL
+            except ModelError as error:
+                result['ai_status'] = 'fallback'
+                result['facts'].append({'label':'AI 识别未完成', 'value':str(error)+'；以下保留规则识别结果。'})
+            result['model_seconds'] = round(time.monotonic() - model_started, 1)
+        elif not key:
+            result['facts'].append({'label':'规则识别', 'value':'尚未配置本地模型密钥，当前使用规则识别。'})
+        else:
+            result['facts'].append({'label':'AI 未调用', 'value':'没有读到可供模型提取的页面内容。'})
+        result['reading_seconds'] = reading_seconds
+    # Some sites expose the public job code only as a suffix of the role title.
+    # Keep the source title intact; never replace an already identified code.
+    if not result['fields'].get('job_code'):
+        code = title_job_code(result['fields'].get('role', ''))
+        if code:
+            result['fields']['job_code'] = code
+            result['evidence']['job_code'] = '当前岗位标题中的编号：' + code
+    from company_logos import is_platform
+    if (result['fields'].get('company') and result['fields'].get('role') and result.get('icon_url')
+            and not is_platform(result['source_url']) and not is_platform(result['icon_url'])):
+        # Return the candidate URL immediately; the logo manager fetches it after save.
+        result['company_logo'] = {'company':result['fields']['company'], 'application_url':url,
+            'logo':{'website':result['source_url'], 'icon_url':result['icon_url']}}
+    return result

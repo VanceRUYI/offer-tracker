@@ -98,3 +98,14 @@ export function attemptLabel(app, records) {
   }
   return app.role+(detail ? ' · '+detail : '');
 }
+
+// Completed tasks live in the journal so later tasks never overwrite them.
+export function completedTasks(apps, {day='',scope='week',today=dayKey()}={}) {
+  return apps.flatMap(app=>(app.events||[]).filter(e=>e.kind==='task'&&!e.task_reopened).map(e=>({
+    ...app, event_id:e.id, next_action:e.task_title||e.note.replace(/^已完成：/,''),
+    due_at:e.task_due_at||'', completed_at:e.created_at, completed_day:e.occurred_on,
+  }))).filter(task=>{
+    const taskDay=(task.due_at||task.completed_day).slice(0,10);
+    return day ? taskDay===day : scope==='all'||taskDay<=shiftDay(today,6);
+  }).sort((a,b)=>b.completed_at.localeCompare(a.completed_at));
+}

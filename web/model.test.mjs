@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, pickerDays, dateValue, taskGroups, filterApps, waitingApps} from './model.mjs';
+import {dayKey, shiftDay, shiftMonth, calendarDate, calendarDays, pickerDays, dateValue, taskGroups, completedTasks, filterApps, waitingApps} from './model.mjs';
 
 test('date picker clamps month-end dates and validates year, month, and day', () => {
   assert.equal(calendarDate(2026,2,31),'2026-02-28');
@@ -134,4 +134,18 @@ test('search matches job codes while old records need no code', () => {
   const records=[{id:'a',company:'Acme',role:'AI',job_code:'001-AI-26'},{id:'b',company:'Acme',role:'后端'}];
   assert.deepEqual(filterApps(records,{query:'001-ai'}).map(a=>a.id),['a']);
   assert.equal(filterApps(records).length,2);
+});
+
+test('completed tasks retain each event, follow date scope, and exclude reopened tasks', () => {
+  const apps=[{id:'one',role:'算法岗',events:[
+    {id:'a',kind:'task',task_title:'笔试',task_due_at:'2026-09-18T14:00',created_at:'2026-09-16T10:00',occurred_on:'2026-09-16'},
+    {id:'b',kind:'task',note:'已完成：旧任务',created_at:'2026-09-15T10:00',occurred_on:'2026-09-15'},
+    {id:'c',kind:'task',task_title:'已恢复',task_reopened:true},
+    {id:'d',kind:'progress'},
+    {id:'e',kind:'task',task_title:'未来',task_due_at:'2027-01-01T10:00',created_at:'2026-09-16T11:00',occurred_on:'2026-09-16'},
+  ]}];
+  assert.deepEqual(completedTasks(apps,{today:'2026-09-16'}).map(t=>t.next_action),['笔试','旧任务']);
+  assert.equal(completedTasks(apps,{day:'2026-09-18'})[0].event_id,'a');
+  assert.equal(completedTasks(apps,{scope:'all'}).length,3);
+  assert.equal(apps[0].events.length,5);
 });

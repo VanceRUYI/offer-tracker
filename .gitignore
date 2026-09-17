@@ -19,9 +19,12 @@ autumn-applications.csv
 __pycache__/
 *.py[cod]
 .venv/
+.browser-runtime/
 venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.cache/
 .coverage
 htmlcov/
 
@@ -29,10 +32,17 @@ htmlcov/
 .env
 .env.*
 !.env.example
+.envrc
 node_modules/
 *.log
 *.tmp
 *.swp
+
+# Browser test reports and diagnostic captures (may contain page/session data)
+test-results/
+playwright-report/
+blob-report/
+*.har
 
 # OS metadata
 .DS_Store

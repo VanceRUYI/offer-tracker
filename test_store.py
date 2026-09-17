@@ -116,6 +116,39 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(result['due_at'], '')
         self.assertIn('完成测评', result['events'][-1]['note'])
 
+    def test_completed_task_snapshot_roundtrip_and_reopen(self):
+        app = self.create(next_action='完成笔试', due_at='2026-09-18T14:00')
+        done = self.store.complete(app['id'])
+        event = done['events'][-1]
+        self.assertEqual(event['task_title'], '完成笔试')
+        self.assertEqual(event['task_due_at'], '2026-09-18T14:00')
+        self.assertEqual(len(self.store.complete(app['id'])['events']), len(done['events']))
+        restored = Store(Path(self.temp.name) / 'completed.sqlite3')
+        restored.import_data(self.store.export())
+        self.assertEqual(restored.get(app['id'])['events'][-1], event)
+        reopened = restored.reopen_task(app['id'], event['id'])
+        self.assertEqual(reopened['next_action'], '完成笔试')
+        self.assertEqual(reopened['due_at'], '2026-09-18T14:00')
+        self.assertTrue(reopened['events'][-1]['task_reopened'])
+        self.assertEqual(restored.reopen_task(app['id'], event['id']), reopened)
+        roundtrip = Store(Path(self.temp.name) / 'reopened.sqlite3')
+        roundtrip.import_data(restored.export())
+        self.assertTrue(roundtrip.get(app['id'])['events'][-1]['task_reopened'])
+
+    def test_reopen_does_not_overwrite_new_task_or_reopen_ended_application(self):
+        app = self.create(next_action='旧任务')
+        done = self.store.complete(app['id'])
+        event_id = done['events'][-1]['id']
+        self.store.update(app['id'], {'next_action':'新的面试'})
+        with self.assertRaises(ValidationError):
+            self.store.reopen_task(app['id'], event_id)
+        self.assertEqual(self.store.get(app['id'])['next_action'], '新的面试')
+        self.store.update(app['id'], {'status':'已结束'})
+        with self.assertRaises(ValidationError):
+            self.store.reopen_task(app['id'], event_id)
+        with self.assertRaises(ValidationError):
+            self.store.reopen_task(app['id'], app['events'][0]['id'])
+
     def test_import_roundtrip_and_skip_existing_without_overwriting(self):
         app = self.create()
         self.store.add_event(app['id'], {'status': '二面', 'note': '复盘', 'occurred_on': '2026-09-15'})

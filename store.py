@@ -3,6 +3,7 @@ import json
 import sqlite3
 import threading
 import uuid
+from company_logos import validate_logo
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -190,6 +191,27 @@ class Store:
                 con.execute("INSERT INTO preferences(key,payload) VALUES('personalization',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", (json.dumps(result, ensure_ascii=False),))
             return result
 
+    def company_logos(self):
+        with self.connect() as con:
+            return {key[len('company-logo:'):]:json.loads(payload) for key,payload in
+                    con.execute("SELECT key,payload FROM preferences WHERE key LIKE 'company-logo:%'")}
+
+    def set_company_logo(self, company, value):
+        company = text(company, '公司', 160)
+        if not company:
+            raise ValidationError('请先填写公司名称')
+        try:
+            logo = validate_logo(value) if value is not None else None
+        except ValueError as error:
+            raise ValidationError(str(error))
+        key = 'company-logo:' + company_key(company)
+        with self.lock, self.connect() as con:
+            if logo is None:
+                con.execute('DELETE FROM preferences WHERE key=?', (key,))
+            else:
+                con.execute('INSERT INTO preferences(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload', (key,json.dumps(logo, ensure_ascii=False)))
+        return logo
+
     def _get(self, con, app_id):
         row = con.execute('SELECT payload FROM applications WHERE id=?', (app_id,)).fetchone()
         if row is None:
@@ -227,9 +249,9 @@ class Store:
                 if row[0] != app.get('id') and company_key(row[1]) == company_key(app['company'])
                 and company_key(row[2]) == company_key(app['role'])]
 
-    def _event(self, con, app_id, status, note, occurred_on=None, kind='progress'):
+    def _event(self, con, app_id, status, note, occurred_on=None, kind='progress', **metadata):
         event = {'id': str(uuid.uuid4()), 'status': status, 'note': note,
-                 'occurred_on': occurred_on or date.today().isoformat(), 'created_at': now(), 'kind': kind}
+                 'occurred_on': occurred_on or date.today().isoformat(), 'created_at': now(), 'kind': kind, **metadata}
         con.execute('INSERT INTO events VALUES(?,?,?)', (event['id'], app_id, json.dumps(event, ensure_ascii=False)))
 
     def create(self, data):
@@ -275,9 +297,32 @@ class Store:
         with self.lock, self.connect() as con:
             app = self._get(con, app_id)
             if app['next_action']:
-                self._event(con, app_id, app['status'], '已完成：' + app['next_action'], kind='task')
+                self._event(con, app_id, app['status'], '已完成：' + app['next_action'], kind='task', task_title=app['next_action'], task_due_at=app['due_at'])
                 app.update(next_action='', due_at='', updated_at=now())
                 self._save(con, app)
+            return self._get(con, app_id)
+
+    def reopen_task(self, app_id, event_id):
+        event_id = text(event_id, '待办编号', 100)
+        with self.lock, self.connect() as con:
+            app = self._get(con, app_id)
+            event = next((e for e in app['events'] if e['id'] == event_id and e['kind'] == 'task'), None)
+            if event is None:
+                raise ValidationError('没有找到这条已完成事项')
+            if event.get('task_reopened'):
+                return app
+            if app['next_action']:
+                raise ValidationError('这个岗位已有新的待办，请先处理当前待办，再恢复这条事项')
+            if app['status'] == '已结束':
+                raise ValidationError('这份投递已结束，请先更新阶段，再恢复待办')
+            title = event.get('task_title') or event['note'].removeprefix('已完成：')
+            if not title:
+                raise ValidationError('这条历史记录没有待办内容')
+            app.update(next_action=title, due_at=event.get('task_due_at', ''), updated_at=now())
+            event['task_reopened'] = True
+            con.execute('UPDATE events SET payload=? WHERE id=? AND application_id=?',
+                        (json.dumps(event, ensure_ascii=False), event_id, app_id))
+            self._save(con, app)
             return self._get(con, app_id)
 
     def backup(self, label='manual'):
@@ -304,12 +349,24 @@ class Store:
                 con.execute('DELETE FROM applications WHERE id=?', (app_id,))
 
     def export(self):
-        return {'format': 'autumn-workbench', 'version': 2, 'exported_at': now(), 'applications': self.list(), 'personalization': self.personalization()}
+        return {'format': 'autumn-workbench', 'version': 2, 'exported_at': now(), 'applications': self.list(), 'personalization': self.personalization(), 'company_logos': self.company_logos()}
 
     def import_data(self, data):
         if not isinstance(data, dict) or data.get('format') != 'autumn-workbench' or data.get('version') not in (1, 2):
             raise ValidationError('请选择本工作台导出的 JSON 备份文件')
         preferences = normalize_personalization(data['personalization']) if 'personalization' in data else None
+        raw_logos = data.get('company_logos', {})
+        if not isinstance(raw_logos, dict) or len(raw_logos)>10000:
+            raise ValidationError('公司图标备份格式不正确')
+        logos = {}
+        for company, value in raw_logos.items():
+            key = company_key(text(company, '图标公司名称', 160))
+            if not key:
+                raise ValidationError('图标公司名称不能为空')
+            try:
+                logos[key] = validate_logo(value)
+            except ValueError as error:
+                raise ValidationError(str(error))
         apps = data.get('applications')
         if not isinstance(apps, list):
             raise ValidationError('备份记录列表不正确')
@@ -333,6 +390,16 @@ class Store:
                     raise ValidationError('时间线编号或阶段不正确')
                 seen_event_ids.add(event_id)
                 app['events'].append({'id': event_id, 'status': entry['status'], 'note': text(entry.get('note', ''), '进展记录', 20000), 'occurred_on': valid_date(entry.get('occurred_on'), '进展日期'), 'created_at': text(entry.get('created_at', now()), '进展创建时间', 40), 'kind': 'task' if entry.get('kind') == 'task' else 'progress'})
+                if app['events'][-1]['kind'] == 'task':
+                    event = app['events'][-1]
+                    if 'task_title' in entry:
+                        event['task_title'] = text(entry['task_title'], '已完成事项', 2000)
+                    if 'task_due_at' in entry:
+                        event['task_due_at'] = valid_date(entry['task_due_at'], '原安排时间', with_time=True, optional=True)
+                    if 'task_reopened' in entry:
+                        if type(entry['task_reopened']) is not bool:
+                            raise ValidationError('待办恢复状态不正确')
+                        event['task_reopened'] = entry['task_reopened']
             validated.append(app)
         with self.lock:
             self.backup('before-import')
@@ -349,6 +416,8 @@ class Store:
                     for event in app['events']:
                         con.execute('INSERT INTO events VALUES(?,?,?)', (event['id'], app['id'], json.dumps(event, ensure_ascii=False)))
                     imported += 1
+                for company, logo in logos.items():
+                    con.execute('INSERT OR IGNORE INTO preferences(key,payload) VALUES(?,?)', ('company-logo:'+company,json.dumps(logo,ensure_ascii=False)))
                 if preferences is not None:
                     con.execute("INSERT OR IGNORE INTO preferences(key,payload) VALUES('personalization',?)", (json.dumps(preferences, ensure_ascii=False),))
             return {'imported': imported, 'skipped': skipped}

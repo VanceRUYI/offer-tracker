@@ -1,0 +1,2 @@
+# Optional: local dynamic recruitment-page reader (Python 3.9+).
+playwright==1.60.0

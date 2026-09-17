@@ -15,11 +15,14 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 from store import Store, ValidationError, DuplicateApplication, PERSONALIZATION_DEFAULTS, PERSONALIZATION_ICONS
 from recognition import recognize
+from company_logos import CATALOG, discover_logo, fetch_recognized_icon
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/styles.css': ('styles.css', 'text/css; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+          '/logos.mjs': ('logos.mjs', 'text/javascript; charset=utf-8'),
+          '/recognition-stream.mjs': ('recognition-stream.mjs', 'text/javascript; charset=utf-8'),
           '/model.mjs': ('model.mjs', 'text/javascript; charset=utf-8'),
           '/dates.mjs': ('dates.mjs', 'text/javascript; charset=utf-8'),
           '/selects.mjs': ('selects.mjs', 'text/javascript; charset=utf-8'),
@@ -27,6 +30,27 @@ ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
 
 
 class Handler(BaseHTTPRequestHandler):
+    def stream_recognition(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.close_connection = True
+        def emit(event):
+            self.wfile.write((json.dumps(event, ensure_ascii=False)+'\n').encode())
+            self.wfile.flush()
+        try:
+            result = recognize(data, progress=lambda event: emit({'type':'progress', **event}), use_ai=True)
+            emit({'type':'result', 'result':result})
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except ValidationError as error:
+            emit({'type':'error', 'error':str(error)})
+        except Exception:
+            emit({'type':'error', 'error':'识别未完成，请重试；输入内容仍保留在页面中'})
+
     def log_message(self, *_args):
         pass
 
@@ -60,6 +84,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {'app': 'autumn-workbench', 'version': 1})
             if path == '/api/personalization':
                 return self.reply(200, {'values': store.personalization(), 'defaults': PERSONALIZATION_DEFAULTS, 'icons': PERSONALIZATION_ICONS})
+            if path == '/api/company-logos':
+                return self.reply(200, {'logos':store.company_logos(), 'catalog':CATALOG})
             if path == '/api/applications':
                 return self.reply(200, store.list())
             if path == '/api/export.json':
@@ -100,12 +126,27 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValidationError('内容不是有效的 JSON')
         else:
             data = {}
+        if self.command == 'POST' and path == '/api/company-logo/discover':
+            if not isinstance(data,dict) or not isinstance(data.get('company'),str):
+                raise ValidationError('请填写公司名称')
+            try:
+                if data.get('icon_url'):
+                    return self.reply(200, fetch_recognized_icon(data.get('website',''), data['icon_url']))
+                return self.reply(200, discover_logo(data['company'], data.get('website',''), automatic=data.get('automatic') is True))
+            except ValueError as error:
+                raise ValidationError(str(error))
+        if self.command == 'POST' and path == '/api/company-logo':
+            if not isinstance(data,dict):
+                raise ValidationError('图标格式不正确')
+            return self.reply(200, store.set_company_logo(data.get('company',''), data.get('logo')))
         if self.command == 'PATCH' and path == '/api/personalization':
             return self.reply(200, store.set_personalization(data))
         if self.command == 'POST' and path == '/api/applications':
             return self.reply(201, store.create(data))
         if self.command == 'POST' and path == '/api/recognize':
-            return self.reply(200, recognize(data))
+            return self.reply(200, recognize(data, use_ai=True))
+        if self.command == 'POST' and path == '/api/recognize-stream':
+            return self.stream_recognition(data)
         if self.command == 'POST' and path == '/api/import':
             return self.reply(200, store.import_data(data))
         parts = path.strip('/').split('/')
@@ -119,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'POST' and len(parts) == 4:
                 if parts[3] == 'events':
                     return self.reply(200, store.add_event(app_id, data))
+                if parts[3] == 'reopen-task':
+                    return self.reply(200, store.reopen_task(app_id, data.get('event_id', '')))
                 if parts[3] == 'complete':
                     return self.reply(200, store.complete(app_id))
         return self.reply(404, {'error': '没有找到这个操作'})
